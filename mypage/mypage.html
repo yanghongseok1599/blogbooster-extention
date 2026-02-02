@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>마이페이지 - 블로그 부스터 Pro</title>
+  <link rel="icon" type="image/png" sizes="16x16" href="../icons/icon16.png">
+  <link rel="icon" type="image/png" sizes="48x48" href="../icons/icon48.png">
+  <link rel="stylesheet" href="mypage.css">
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+  <script src="../lib/env-config.js"></script>
+  <script src="../lib/firebase-config.js"></script>
+</head>
+<body>
+  <div class="mypage-container">
+    <!-- 헤더 -->
+    <header class="mypage-header">
+      <button class="back-btn" id="backBtn" title="돌아가기">
+        <span class="back-icon">&larr;</span>
+      </button>
+      <h1>마이페이지</h1>
+      <div class="header-spacer"></div>
+    </header>
+
+    <!-- 로딩 화면 -->
+    <div class="loading-screen" id="loadingScreen">
+      <div class="loading-spinner"></div>
+      <p>로딩 중...</p>
+    </div>
+
+    <!-- 메인 컨텐츠 -->
+    <main class="mypage-content" id="mainContent" style="display: none;">
+      <!-- 프로필 섹션 -->
+      <section class="profile-section">
+        <div class="profile-avatar" id="profileAvatar">
+          <span class="avatar-icon">👤</span>
+        </div>
+        <div class="profile-info">
+          <h2 class="profile-name" id="profileName">사용자</h2>
+          <p class="profile-email" id="profileEmail">email@example.com</p>
+          <div class="profile-plan">
+            <span class="plan-badge" id="profilePlan">무료 플랜</span>
+            <span class="plan-expiry" id="planExpiry"></span>
+          </div>
+        </div>
+      </section>
+
+      <!-- 탭 네비게이션 -->
+      <nav class="tab-nav">
+        <button class="tab-btn active" data-tab="profile">
+          <span class="tab-icon">👤</span>
+          <span class="tab-text">정보</span>
+        </button>
+        <button class="tab-btn" data-tab="learning">
+          <span class="tab-icon">🧠</span>
+          <span class="tab-text">학습 데이터</span>
+        </button>
+        <button class="tab-btn" data-tab="posts">
+          <span class="tab-icon">📝</span>
+          <span class="tab-text">생성된 글</span>
+        </button>
+      </nav>
+
+      <!-- 탭 컨텐츠 -->
+      <div class="tab-content">
+        <!-- 프로필 정보 탭 -->
+        <div class="tab-pane active" id="profileTab">
+          <div class="card">
+            <h3 class="card-title">기본 정보</h3>
+            <div class="info-list">
+              <div class="info-item">
+                <span class="info-label">이름</span>
+                <span class="info-value" id="infoName">-</span>
+              </div>
+              <div class="info-item">
+                <span class="info-label">닉네임</span>
+                <span class="info-value" id="infoNickname">-</span>
+              </div>
+              <div class="info-item">
+                <span class="info-label">이메일</span>
+                <span class="info-value" id="infoEmail">-</span>
+              </div>
+              <div class="info-item">
+                <span class="info-label">가입일</span>
+                <span class="info-value" id="infoCreatedAt">-</span>
+              </div>
+              <div class="info-item">
+                <span class="info-label">마지막 로그인</span>
+                <span class="info-value" id="infoLastLogin">-</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3 class="card-title">이용 현황</h3>
+            <div class="stats-grid">
+              <div class="stat-box">
+                <span class="stat-value" id="statLearned">0</span>
+                <span class="stat-label">학습된 글</span>
+              </div>
+              <div class="stat-box">
+                <span class="stat-value" id="statGenerated">0</span>
+                <span class="stat-label">생성된 글</span>
+              </div>
+              <div class="stat-box">
+                <span class="stat-value" id="statUsageCount">0</span>
+                <span class="stat-label">총 사용 횟수</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3 class="card-title">비밀번호 변경</h3>
+            <p class="card-desc">비밀번호 재설정 이메일을 받으실 수 있습니다.</p>
+            <button class="btn btn-primary" id="resetPasswordBtn">
+              비밀번호 재설정 이메일 받기
+            </button>
+          </div>
+
+          <div class="card danger-zone">
+            <h3 class="card-title">계정 관리</h3>
+            <button class="btn btn-danger" id="logoutBtn">로그아웃</button>
+          </div>
+        </div>
+
+        <!-- 학습 데이터 탭 -->
+        <div class="tab-pane" id="learningTab">
+          <div class="card">
+            <h3 class="card-title">학습 요약</h3>
+            <div class="learning-summary" id="learningSummary">
+              <div class="summary-item">
+                <span class="summary-label">총 학습된 글</span>
+                <span class="summary-value" id="summaryTotal">0개</span>
+              </div>
+              <div class="summary-item">
+                <span class="summary-label">평균 SEO 점수</span>
+                <span class="summary-value" id="summaryAvgSeo">-점</span>
+              </div>
+              <div class="summary-item">
+                <span class="summary-label">선호 스타일</span>
+                <span class="summary-value" id="summaryStyle">-</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3 class="card-title">학습된 블로그 목록</h3>
+            <div class="list-container" id="learningList">
+              <div class="empty-state">
+                <span class="empty-icon">🧠</span>
+                <p>아직 학습된 글이 없습니다.</p>
+                <p class="empty-hint">블로그를 분석할 때 "분석 + 학습"을 선택하면 AI가 학습합니다.</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3 class="card-title">학습 데이터 관리</h3>
+            <p class="card-desc">학습 데이터를 초기화하면 AI가 처음부터 다시 학습합니다.</p>
+            <button class="btn btn-outline" id="clearLearningBtn">학습 데이터 초기화</button>
+          </div>
+        </div>
+
+        <!-- 생성된 글 탭 -->
+        <div class="tab-pane" id="postsTab">
+          <div class="card">
+            <div class="card-header">
+              <h3 class="card-title">내가 생성한 글</h3>
+              <span class="post-count" id="postCount">0개</span>
+            </div>
+            <div class="list-container" id="postsList">
+              <div class="empty-state">
+                <span class="empty-icon">📝</span>
+                <p>아직 생성된 글이 없습니다.</p>
+                <p class="empty-hint">블로그를 분석 후 AI로 글을 생성해보세요.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- 글 상세 보기 모달 -->
+  <div class="modal-overlay" id="postDetailModal" style="display: none;">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 class="modal-title" id="modalTitle">글 제목</h3>
+        <button class="modal-close" id="modalClose">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="post-meta" id="modalMeta">
+          <span class="meta-date"></span>
+          <span class="meta-type"></span>
+        </div>
+        <div class="post-content" id="modalContent"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" id="copyPostBtn">복사하기</button>
+        <button class="btn btn-primary" id="closeModalBtn">닫기</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 알림 토스트 -->
+  <div class="toast" id="toast" style="display: none;">
+    <span class="toast-message" id="toastMessage"></span>
+  </div>
+
+  <script src="mypage.js"></script>
+</body>
+</html>
