@@ -469,6 +469,12 @@ if (!window._editorInjectorV18) {
   }
 
   chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
+    // EditorInjector가 처리하지 않는 메시지는 무시
+    const editorActions = ['startTyping', 'stopTyping', 'checkEditor'];
+    if (!editorActions.includes(req.action)) {
+      return false; // 다른 리스너가 처리하도록
+    }
+
     // 에디터가 없는 프레임은 무시
     if (req.action === 'startTyping' || req.action === 'checkEditor') {
       if (!hasEditorInThisFrame()) {

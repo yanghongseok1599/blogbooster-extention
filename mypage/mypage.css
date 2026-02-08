@@ -499,6 +499,85 @@ body {
   border: 1px solid #ffe0e0;
 }
 
+/* API 키 설정 */
+.api-key-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  background: #f8f9fa;
+  border-radius: 8px;
+}
+
+.status-label {
+  font-size: 13px;
+  color: #666;
+}
+
+.status-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: #999;
+  font-family: 'Courier New', monospace;
+}
+
+.status-value.active {
+  color: #764ba2;
+}
+
+.api-key-input-group {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.api-key-input {
+  flex: 1;
+  padding: 10px 14px;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  font-size: 13px;
+  font-family: 'Courier New', monospace;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.api-key-input:focus {
+  border-color: #764ba2;
+  box-shadow: 0 0 0 3px rgba(118, 75, 162, 0.1);
+}
+
+.btn-toggle-visibility {
+  padding: 8px 12px;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 16px;
+  transition: background 0.2s;
+}
+
+.btn-toggle-visibility:hover {
+  background: #f0f0f0;
+}
+
+.api-key-actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.api-key-actions .btn {
+  flex: 1;
+}
+
+.api-key-hint {
+  font-size: 11px;
+  color: #999;
+  margin-top: 4px;
+}
+
 /* 모달 */
 .modal-overlay {
   position: fixed;

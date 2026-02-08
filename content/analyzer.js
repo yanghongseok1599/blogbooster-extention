@@ -668,28 +668,29 @@ const BlogAnalyzer = {
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'analyze') {
     try {
-      // 먼저 추출
       const extractedData = BlogExtractor.extract();
-      if (!extractedData) {
-        sendResponse({ success: false, error: '본문을 추출할 수 없습니다.' });
+      if (!extractedData || !extractedData.fullText || extractedData.fullText.length < 30) {
+        sendResponse({ success: false, error: '본문 없음' });
         return true;
       }
-
-      // 분석 실행
       const analysis = BlogAnalyzer.analyze(extractedData);
-      sendResponse({
-        success: true,
-        data: {
-          extracted: extractedData,
-          analysis: analysis
-        }
-      });
+      sendResponse({ success: true, data: { extracted: extractedData, analysis: analysis } });
     } catch (error) {
-      console.error('[Analyzer] 분석 오류:', error);
       sendResponse({ success: false, error: error.message });
     }
+    return true;
   }
-  return true;
+
+  // 이미 추출된 데이터를 분석만 수행
+  if (request.action === 'analyzeData') {
+    try {
+      const analysis = BlogAnalyzer.analyze(request.extractedData);
+      sendResponse({ success: true, analysis: analysis });
+    } catch (error) {
+      sendResponse({ success: false, error: error.message });
+    }
+    return true;
+  }
 });
 
 // 전역 노출

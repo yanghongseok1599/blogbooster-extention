@@ -44,6 +44,13 @@
   flex-direction: column;
   overflow: hidden;
   animation: bb-slideIn 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  min-width: 160px;
+  min-height: 200px;
+}
+
+.bb-analysis-sidebar.bb-dragged {
+  transform: none !important;
+  animation: none !important;
 }
 
 @keyframes bb-slideIn {
@@ -58,6 +65,39 @@
   justify-content: space-between;
   align-items: center;
   border-bottom: 1px solid var(--bb-glass-border);
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.bb-sidebar-header:active {
+  cursor: grabbing;
+}
+
+/* 리사이즈 핸들 */
+.bb-resize-handle {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  z-index: 10;
+}
+
+.bb-resize-handle::after {
+  content: '';
+  position: absolute;
+  bottom: 3px;
+  right: 3px;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid rgba(139, 92, 246, 0.35);
+  border-bottom: 2px solid rgba(139, 92, 246, 0.35);
+}
+
+.bb-resize-handle:hover::after {
+  border-color: var(--bb-primary);
 }
 
 .bb-sidebar-title {

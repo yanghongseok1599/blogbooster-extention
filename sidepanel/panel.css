@@ -1380,6 +1380,29 @@ body {
 }
 
 /* 이미지 생성 버튼 */
+.copy-all-prompts-btn {
+  width: 100%;
+  padding: 12px;
+  background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+  color: white;
+  border: none;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 12px;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.copy-all-prompts-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 15px rgba(139, 92, 246, 0.4);
+}
+
 .image-gen-btn {
   width: 100%;
   padding: 12px;
@@ -2100,4 +2123,39 @@ body {
   cursor: not-allowed;
   transform: none;
   box-shadow: none;
+}
+
+/* 하단 광고 배너 */
+.ad-banner {
+  margin: 16px;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+}
+
+.ad-banner-link {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.ad-banner-link:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+}
+
+.ad-banner-img {
+  width: 100%;
+  display: block;
+}
+
+.ad-banner-cta {
+  background: linear-gradient(135deg, #1a1a2e, #16213e);
+  color: #fff;
+  text-align: center;
+  padding: 12px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
 }

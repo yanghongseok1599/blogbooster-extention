@@ -424,6 +424,135 @@ document.addEventListener('DOMContentLoaded', function() {
    * 분석 실행
    * @param {boolean} withLearning - 학습 포함 여부
    */
+  /**
+   * 페이지에서 직접 블로그 본문 추출 (자체 포함 함수 - 콘텐츠 스크립트 불필요)
+   */
+  function extractBlogContent() {
+    var selectors = [
+      '.se-main-container', '#postViewArea', '.post_ct', '.se-viewer',
+      '.se_component_wrap', '.se_post_wrap', '#post-view', '.post-view',
+      '.se-component-content', '.post_article', '.__se_component_area',
+      '.se_doc_viewer', '.blog_post_content', 'article', 'main'
+    ];
+
+    // 셀렉터로 컨테이너 찾기
+    var container = null;
+    for (var i = 0; i < selectors.length; i++) {
+      var el = document.querySelector(selectors[i]);
+      if (el && el.textContent.trim().length > 100) {
+        container = el;
+        break;
+      }
+    }
+
+    // 못 찾으면 텍스트가 가장 많은 블록 요소
+    if (!container) {
+      var best = null;
+      var bestLen = 200;
+      document.querySelectorAll('div, section, article').forEach(function(el) {
+        var cls = (el.className || '').toLowerCase();
+        var id = (el.id || '').toLowerCase();
+        if (cls.match(/nav|sidebar|footer|header|menu|comment/) ||
+            id.match(/nav|sidebar|footer|header|menu|comment/)) return;
+        var len = el.textContent.trim().length;
+        if (len > bestLen && el.querySelectorAll('div').length < 100) {
+          bestLen = len;
+          best = el;
+        }
+      });
+      container = best;
+    }
+
+    if (!container) return null;
+
+    // 텍스트 추출
+    var fullText = '';
+    var paragraphs = [];
+    container.querySelectorAll('p, .se-text-paragraph, .se_textarea, div[class*="text"]').forEach(function(p) {
+      var t = p.textContent.trim();
+      if (t.length > 5) {
+        paragraphs.push({ text: t, length: t.length, element: p.tagName.toLowerCase() });
+        fullText += t + '\n';
+      }
+    });
+    if (!fullText) fullText = container.textContent.trim();
+    if (fullText.length < 30) return null;
+
+    // 제목 추출
+    var title = '';
+    var titleSelectors = ['.se-title-text', '.pcol1', '.tit_h3', '#title'];
+    for (var j = 0; j < titleSelectors.length; j++) {
+      var titleEl = document.querySelector(titleSelectors[j]);
+      if (titleEl && titleEl.textContent.trim()) {
+        title = titleEl.textContent.trim();
+        break;
+      }
+    }
+    if (!title) {
+      var ogTitle = document.querySelector('meta[property="og:title"]');
+      if (ogTitle) title = ogTitle.getAttribute('content') || '';
+    }
+
+    // 이미지 추출
+    var images = [];
+    container.querySelectorAll('img').forEach(function(img) {
+      var src = img.src || img.dataset.src || '';
+      if (src && !src.includes('icon') && !src.includes('logo') && img.width > 50) {
+        images.push({ src: src, alt: img.alt || '' });
+      }
+    });
+
+    // 태그 추출
+    var tags = [];
+    document.querySelectorAll('.post_tag a, .tag_area a, .wrap_tag a, #tagList a, .post-tag a').forEach(function(a) {
+      var tag = a.textContent.trim().replace('#', '');
+      if (tag && tags.indexOf(tag) === -1) tags.push(tag);
+    });
+
+    // 소제목 추출 (중복 방지)
+    var subheadings = [];
+    var addedTexts = {};
+    function addSubheading(text, type) {
+      if (!text || text.length < 3 || text.length > 50) return;
+      // 대괄호로 감싸진 텍스트는 이미지 설명/카테고리일 가능성 높으므로 제외
+      if (/^\[.+\]$/.test(text)) return;
+      if (addedTexts[text]) return;
+      addedTexts[text] = true;
+      subheadings.push({ text: text, type: type });
+    }
+    // h2, h3 태그 (가장 확실한 소제목)
+    container.querySelectorAll('h2, h3').forEach(function(el) {
+      addSubheading(el.textContent.trim(), el.tagName);
+    });
+    // 네이버 스마트에디터 소제목 스타일
+    container.querySelectorAll('.se-section-title').forEach(function(el) {
+      addSubheading(el.textContent.trim(), 'section-title');
+    });
+    // 인용구 스타일 소제목 (짧은 텍스트만)
+    container.querySelectorAll('.se-quotation').forEach(function(el) {
+      var t = el.textContent.trim();
+      if (t.length <= 40) addSubheading(t, 'quotation');
+    });
+
+    return {
+      title: title,
+      fullText: fullText,
+      paragraphs: paragraphs,
+      images: images,
+      tags: tags,
+      subheadings: subheadings,
+      stats: {
+        charCount: fullText.length,
+        paragraphCount: paragraphs.length,
+        imageCount: images.length,
+        tagCount: tags.length,
+        subheadingCount: subheadings.length
+      },
+      url: window.location.href,
+      extractedAt: new Date().toISOString()
+    };
+  }
+
   function runAnalysis(withLearning) {
     hideAnalysisModal();
     showLoading(true, '블로그 글을 분석하고 있습니다...');
@@ -437,30 +566,265 @@ document.addEventListener('DOMContentLoaded', function() {
         return;
       }
 
-      chrome.tabs.sendMessage(tab.id, { action: 'analyze' }, function(response) {
+      // 모든 프레임에 직접 추출 함수 주입
+      chrome.scripting.executeScript({
+        target: { tabId: tab.id, allFrames: true },
+        func: extractBlogContent
+      }, function(results) {
         if (chrome.runtime.lastError) {
+          console.error('[Panel] 추출 오류:', chrome.runtime.lastError.message);
           alert('분석 중 오류가 발생했습니다. 페이지를 새로고침 후 다시 시도해주세요.');
           showLoading(false);
           return;
         }
 
-        if (response && response.success) {
-          currentData = response.data;
-          updateUI(response.data);
-          chrome.storage.local.set({ currentAnalysis: response.data });
+        // 모든 프레임 결과에서 가장 긴 텍스트 선택
+        var bestExtracted = null;
+        var bestLength = 0;
 
-          // 학습 엔진에 데이터 전달 (withLearning이 true일 때만)
-          if (withLearning && typeof LearningEngine !== 'undefined') {
-            LearningEngine.learn(response.data).then(function() {
-              updateLearningStatus();
-            });
-          }
-        } else {
-          alert(response ? response.error : '분석에 실패했습니다.');
+        if (results) {
+          results.forEach(function(frameResult) {
+            if (frameResult && frameResult.result && frameResult.result.fullText) {
+              var textLen = frameResult.result.fullText.length;
+              if (textLen > bestLength) {
+                bestLength = textLen;
+                bestExtracted = frameResult.result;
+              }
+            }
+          });
         }
-        showLoading(false);
+
+        if (bestExtracted) {
+          // 타임아웃 + 콘텐츠 스크립트 분석 시도
+          var analysisHandled = false;
+          var analysisTimeout = setTimeout(function() {
+            if (analysisHandled) return;
+            analysisHandled = true;
+            console.log('[Panel] analyzeData 타임아웃 - 기본 분석 사용');
+            var analysis = buildBasicAnalysis(bestExtracted);
+            currentData = { extracted: bestExtracted, analysis: analysis };
+            try { updateUI(currentData); } catch(e) { console.error('[Panel] UI 업데이트 오류:', e); }
+            chrome.storage.local.set({ currentAnalysis: currentData });
+            if (withLearning && typeof LearningEngine !== 'undefined') {
+              LearningEngine.learn(currentData).then(function() { updateLearningStatus(); });
+            }
+            showLoading(false);
+          }, 3000);
+
+          chrome.tabs.sendMessage(tab.id, {
+            action: 'analyzeData',
+            extractedData: bestExtracted
+          }, function(analysisResponse) {
+            if (analysisHandled) return;
+            analysisHandled = true;
+            clearTimeout(analysisTimeout);
+
+            var analysis;
+            if (!chrome.runtime.lastError && analysisResponse && analysisResponse.success && analysisResponse.analysis) {
+              analysis = analysisResponse.analysis;
+            } else {
+              // 분석기 없으면 기본 분석
+              analysis = buildBasicAnalysis(bestExtracted);
+            }
+
+            currentData = { extracted: bestExtracted, analysis: analysis };
+            try { updateUI(currentData); } catch(e) { console.error('[Panel] UI 업데이트 오류:', e); }
+            chrome.storage.local.set({ currentAnalysis: currentData });
+
+            if (withLearning && typeof LearningEngine !== 'undefined') {
+              LearningEngine.learn(currentData).then(function() {
+                updateLearningStatus();
+              });
+            }
+            showLoading(false);
+          });
+        } else {
+          alert('블로그 본문을 찾을 수 없습니다. 페이지를 새로고침 후 다시 시도해주세요.');
+          showLoading(false);
+        }
       });
     });
+  }
+
+  /**
+   * 기본 분석 (콘텐츠 스크립트 없이)
+   */
+  function buildBasicAnalysis(extracted) {
+    var text = extracted.fullText || '';
+    var totalLen = text.length || 1;
+    var paragraphs = extracted.paragraphs || [];
+    var pCount = paragraphs.length || 1;
+    var subheadings = extracted.subheadings || [];
+    var images = extracted.images || [];
+    var tags = extracted.tags || [];
+
+    // 서론/본론/결론 문단 분류
+    var introEnd = Math.max(1, Math.floor(pCount * 0.15));
+    var conclusionStart = Math.floor(pCount * 0.85);
+
+    var introParagraphs = paragraphs.slice(0, introEnd);
+    var bodyParagraphs = paragraphs.slice(introEnd, conclusionStart);
+    var conclusionParagraphs = paragraphs.slice(conclusionStart);
+
+    var introPercent = Math.round((introParagraphs.length / pCount) * 100) || 15;
+    var bodyPercent = Math.round((bodyParagraphs.length / pCount) * 100) || 70;
+    var conclusionPercent = 100 - introPercent - bodyPercent;
+
+    var introCharCount = introParagraphs.reduce(function(sum, p) { return sum + (p.length || (p.text || '').length); }, 0);
+    var bodyCharCount = bodyParagraphs.reduce(function(sum, p) { return sum + (p.length || (p.text || '').length); }, 0);
+    var conclusionCharCount = conclusionParagraphs.reduce(function(sum, p) { return sum + (p.length || (p.text || '').length); }, 0);
+
+    // 문장 분리
+    var sentences = text.split(/[.!?。]+/).filter(function(s) { return s.trim().length > 5; });
+    var avgSentenceLength = sentences.length > 0 ? Math.round(totalLen / sentences.length) : 0;
+    var avgParagraphLength = Math.round(totalLen / pCount);
+
+    // 문장 유형 분류
+    var statements = 0, questions = 0, exclamations = 0;
+    sentences.forEach(function(s) {
+      if (s.trim().endsWith('?')) questions++;
+      else if (s.trim().endsWith('!')) exclamations++;
+      else statements++;
+    });
+    var totalSentences = sentences.length || 1;
+
+    // 이미지 위치 패턴
+    var imagePositions = [];
+    images.forEach(function(img, i) {
+      imagePositions.push(Math.round((i / (images.length || 1)) * 100));
+    });
+    var imagePattern = images.length === 0 ? 'no_images' : 'scattered';
+
+    // 메인 키워드 추출 (제목에서)
+    var mainKeyword = extracted.title || '';
+
+    // 키워드 밀도
+    var density = 0;
+    if (mainKeyword && text.length > 0) {
+      try {
+        var kwCount = (text.match(new RegExp(mainKeyword, 'gi')) || []).length;
+        var totalWords = text.split(/\s+/).length;
+        density = totalWords > 0 ? parseFloat(((kwCount / totalWords) * 100).toFixed(2)) : 0;
+      } catch(e) {}
+    }
+
+    // 키워드 위치맵
+    var positionMap = {
+      title: mainKeyword ? new RegExp(mainKeyword, 'i').test(extracted.title || '') : false,
+      firstParagraph: false,
+      subheadings: false,
+      middle: false,
+      lastParagraph: false,
+      tags: false
+    };
+    if (mainKeyword && paragraphs.length > 0) {
+      try {
+        var kwRegex = new RegExp(mainKeyword, 'i');
+        var firstP = typeof paragraphs[0] === 'string' ? paragraphs[0] : (paragraphs[0].text || '');
+        positionMap.firstParagraph = kwRegex.test(firstP);
+        var lastP = typeof paragraphs[pCount-1] === 'string' ? paragraphs[pCount-1] : (paragraphs[pCount-1].text || '');
+        positionMap.lastParagraph = kwRegex.test(lastP);
+        positionMap.tags = tags.some(function(t) { return kwRegex.test(t); });
+      } catch(e) {}
+    }
+
+    // SEO 기본 점수
+    var seoScore = 0;
+    var seoFactors = [];
+
+    // 제목 키워드
+    if (positionMap.title) { seoScore += 25; seoFactors.push({ factor: 'title_keyword', score: 25, status: 'good' }); }
+    else { seoFactors.push({ factor: 'title_keyword', score: 0, status: 'bad' }); }
+
+    // 키워드 밀도
+    if (density >= 1 && density <= 3) { seoScore += 20; seoFactors.push({ factor: 'keyword_density', score: 20, status: 'good' }); }
+    else if (density > 0) { seoScore += 10; seoFactors.push({ factor: 'keyword_density', score: 10, status: 'warning' }); }
+    else { seoFactors.push({ factor: 'keyword_density', score: 0, status: 'bad' }); }
+
+    // 글 길이
+    if (totalLen >= 1500) { seoScore += 20; seoFactors.push({ factor: 'content_length', score: 20, status: 'good' }); }
+    else if (totalLen >= 800) { seoScore += 10; seoFactors.push({ factor: 'content_length', score: 10, status: 'warning' }); }
+    else { seoFactors.push({ factor: 'content_length', score: 0, status: 'bad' }); }
+
+    // 이미지
+    if (images.length >= 3) { seoScore += 15; seoFactors.push({ factor: 'images', score: 15, status: 'good' }); }
+    else if (images.length > 0) { seoScore += 8; seoFactors.push({ factor: 'images', score: 8, status: 'warning' }); }
+    else { seoFactors.push({ factor: 'images', score: 0, status: 'bad' }); }
+
+    // 소제목
+    if (subheadings.length >= 2) { seoScore += 10; seoFactors.push({ factor: 'subheadings', score: 10, status: 'good' }); }
+    else if (subheadings.length > 0) { seoScore += 5; seoFactors.push({ factor: 'subheadings', score: 5, status: 'warning' }); }
+    else { seoFactors.push({ factor: 'subheadings', score: 0, status: 'bad' }); }
+
+    // 태그
+    if (tags.length >= 5) { seoScore += 10; seoFactors.push({ factor: 'tags', score: 10, status: 'good' }); }
+    else if (tags.length > 0) { seoScore += 5; seoFactors.push({ factor: 'tags', score: 5, status: 'warning' }); }
+    else { seoFactors.push({ factor: 'tags', score: 0, status: 'bad' }); }
+
+    var seoGrade = seoScore >= 95 ? 'S' : seoScore >= 85 ? 'A' : seoScore >= 70 ? 'B' : seoScore >= 55 ? 'C' : seoScore >= 40 ? 'D' : 'F';
+
+    // 첫 문장 후킹 유형
+    var firstSentence = sentences[0] || '';
+    var hookType = 'direct';
+    if (firstSentence.includes('?')) hookType = 'question';
+    else if (firstSentence.includes('!')) hookType = 'exclamation';
+    else if (firstSentence.includes('안녕') || firstSentence.includes('반갑')) hookType = 'greeting';
+
+    return {
+      structure: {
+        intro: {
+          percent: introPercent,
+          paragraphs: introParagraphs,
+          charCount: introCharCount,
+          style: 'statement_opening'
+        },
+        body: {
+          percent: bodyPercent,
+          paragraphs: bodyParagraphs,
+          sectionCount: subheadings.length || Math.ceil(bodyParagraphs.length / 3),
+          charCount: bodyCharCount
+        },
+        conclusion: {
+          percent: conclusionPercent,
+          paragraphs: conclusionParagraphs,
+          charCount: conclusionCharCount,
+          style: 'general_conclusion'
+        },
+        imagePositions: {
+          pattern: imagePattern,
+          positions: imagePositions
+        },
+        avgParagraphLength: avgParagraphLength,
+        avgSentenceLength: avgSentenceLength,
+        subheadings: subheadings
+      },
+      keywords: {
+        mainKeyword: mainKeyword,
+        subKeywords: [],
+        density: density,
+        tags: tags,
+        positionMap: positionMap
+      },
+      style: {
+        sentenceTypes: {
+          statement: Math.round((statements / totalSentences) * 100),
+          question: Math.round((questions / totalSentences) * 100),
+          exclamation: Math.round((exclamations / totalSentences) * 100)
+        },
+        writingStyle: 'casual',
+        tone: avgSentenceLength < 30 ? 'concise' : avgSentenceLength > 60 ? 'detailed' : 'balanced',
+        hookType: hookType,
+        avgSentenceLength: avgSentenceLength,
+        emoji: { count: 0, unique: [] }
+      },
+      seo: {
+        score: seoScore,
+        maxScore: 100,
+        percentage: seoScore,
+        grade: seoGrade,
+        factors: seoFactors
+      }
+    };
   }
 
   /**
@@ -838,21 +1202,6 @@ document.addEventListener('DOMContentLoaded', function() {
       : Promise.resolve(null);
 
     learningInsightsPromise.then(function(learnedInsights) {
-      // 서버 API 키와 개인 API 키 모두 확인
-      Promise.all([
-        chrome.storage.local.get(['serverGeminiApiKey']),
-        chrome.storage.sync.get(['geminiApiKey'])
-      ]).then(function(results) {
-        var serverKey = results[0].serverGeminiApiKey;
-        var personalKey = results[1].geminiApiKey;
-        var apiKey = serverKey || personalKey;
-
-        if (!apiKey) {
-          alert('API 키가 설정되지 않았습니다. 관리자에게 문의하세요.');
-          showLoading(false);
-          return;
-        }
-
         var prompt = buildPrompt(currentData.analysis, {
           mainKeyword: mainKeyword,
           subKeywords: subKeywords,
@@ -865,6 +1214,7 @@ document.addEventListener('DOMContentLoaded', function() {
           learnedInsights: learnedInsights
         });
 
+      // 서비스 워커에서 API 키를 관리하므로 직접 요청
       chrome.runtime.sendMessage({
         action: 'generateContent',
         prompt: prompt
@@ -891,7 +1241,6 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         showLoading(false);
       });
-      }); // Promise.all 닫기
     }); // learningInsightsPromise.then 닫기
   }
 
@@ -969,7 +1318,7 @@ document.addEventListener('DOMContentLoaded', function() {
       var copyTitleBtn = document.getElementById('copyTitleBtn');
       if (copyTitleBtn) {
         copyTitleBtn.addEventListener('click', function() {
-          navigator.clipboard.writeText(generatedTitle).then(function() {
+          safeCopy(generatedTitle).then(function() {
             copyTitleBtn.textContent = '복사됨!';
             setTimeout(function() { copyTitleBtn.textContent = '제목 복사'; }, 1500);
           });
@@ -1039,9 +1388,11 @@ document.addEventListener('DOMContentLoaded', function() {
       promptsList.querySelectorAll('.copy-prompt-btn').forEach(function(btn) {
         btn.addEventListener('click', function() {
           var promptText = btn.getAttribute('data-prompt');
-          navigator.clipboard.writeText(promptText).then(function() {
+          safeCopy(promptText).then(function() {
             btn.textContent = '복사됨!';
             setTimeout(function() { btn.textContent = '복사'; }, 1500);
+          }).catch(function() {
+            alert('복사에 실패했습니다.');
           });
         });
       });
@@ -1210,14 +1561,42 @@ document.addEventListener('DOMContentLoaded', function() {
   }
 
   /**
-   * 클립보드에 복사
+   * 클립보드 복사 (폴백 포함)
    */
+  function safeCopy(text) {
+    return new Promise(function(resolve, reject) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(resolve).catch(function() {
+          // 폴백: textarea 방식
+          fallbackCopy(text) ? resolve() : reject(new Error('복사 실패'));
+        });
+      } else {
+        fallbackCopy(text) ? resolve() : reject(new Error('복사 실패'));
+      }
+    });
+  }
+
+  function fallbackCopy(text) {
+    try {
+      var textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0';
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      var success = document.execCommand('copy');
+      document.body.removeChild(textarea);
+      return success;
+    } catch (e) {
+      return false;
+    }
+  }
+
   function copyToClipboard() {
     var content = document.getElementById('resultContent').textContent;
-    navigator.clipboard.writeText(content).then(function() {
+    safeCopy(content).then(function() {
       alert('클립보드에 복사되었습니다!');
-    }).catch(function(error) {
-      console.error('복사 실패:', error);
+    }).catch(function() {
       alert('복사에 실패했습니다.');
     });
   }
@@ -1276,6 +1655,26 @@ document.addEventListener('DOMContentLoaded', function() {
   generateBtn.addEventListener('click', generatePost);
   copyBtn.addEventListener('click', copyToClipboard);
 
+  // 프롬프트 전체복사 버튼 이벤트
+  var copyAllPromptsBtn = document.getElementById('copyAllPromptsBtn');
+  if (copyAllPromptsBtn) {
+    copyAllPromptsBtn.addEventListener('click', function() {
+      if (!generatedImagePrompts || generatedImagePrompts.length === 0) {
+        alert('복사할 프롬프트가 없습니다.');
+        return;
+      }
+      var allPrompts = generatedImagePrompts.map(function(desc, i) {
+        return (i + 1) + '. ' + generateNanobanaPrompt(desc);
+      }).join('\n\n');
+      safeCopy(allPrompts).then(function() {
+        copyAllPromptsBtn.textContent = '복사 완료!';
+        setTimeout(function() { copyAllPromptsBtn.textContent = '프롬프트 전체복사'; }, 1500);
+      }).catch(function() {
+        alert('복사에 실패했습니다.');
+      });
+    });
+  }
+
   // 이미지 생성 버튼 이벤트
   var imageGenBtn = document.getElementById('imageGenBtn');
   if (imageGenBtn) {
@@ -1309,7 +1708,7 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 
     // 클립보드에 복사
-    navigator.clipboard.writeText(processedText).then(function() {
+    safeCopy(processedText).then(function() {
       typingProgressFill.style.width = '100%';
       typingProgressText.textContent = '복사 완료!';
       typingProgress.style.display = 'block';
@@ -1762,7 +2161,7 @@ document.addEventListener('DOMContentLoaded', function() {
       var copyTitleBtn = document.getElementById('copyTitleBtn');
       if (copyTitleBtn) {
         copyTitleBtn.addEventListener('click', function() {
-          navigator.clipboard.writeText(generatedTitle).then(function() {
+          safeCopy(generatedTitle).then(function() {
             copyTitleBtn.textContent = '복사됨!';
             setTimeout(function() { copyTitleBtn.textContent = '제목 복사'; }, 1500);
           });

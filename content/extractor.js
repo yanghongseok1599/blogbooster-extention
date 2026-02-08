@@ -17,16 +17,30 @@ const BlogExtractor = {
       '#post-view',                  // 신버전
       '.post-view',                  // 대체 셀렉터
       'div.blog2_series_wrap',       // 시리즈 글
-      'article',                     // 일반 article 태그
       '.se-component-content',       // 컴포넌트
       '#content-area .post_article', // content-area 내부
-      '.post_article'                // 포스트 아티클
+      '.post_article',               // 포스트 아티클
+      '.__se_component_area',        // SE 컴포넌트 영역 (신규)
+      '.se_doc_viewer',              // 문서 뷰어
+      '.se-section-content',         // 섹션 컨텐츠
+      '#viewTypeSelector',           // 뷰타입 셀렉터
+      '.blog_post_content',          // 블로그 포스트 컨텐츠
+      '#postListBody',               // 포스트 리스트 바디
+      'div[id^="post-view"]',        // post-view로 시작하는 ID
+      'div[class*="post_ct"]',       // post_ct를 포함하는 클래스
+      'div[class*="se-viewer"]',     // se-viewer를 포함하는 클래스
+      'article',                     // 일반 article 태그
+      'div[role="article"]',         // role=article
+      '#body',                       // body ID
+      '.entry-content',              // 엔트리 컨텐츠
+      'main'                         // main 태그
     ],
     title: [
       '.se-title-text',
       '.pcol1',
       '.tit_h3',
       '#title',
+      '.se-fs-',
       'meta[property="og:title"]'
     ],
     tags: [
@@ -44,12 +58,23 @@ const BlogExtractor = {
    */
   getIframeDocument() {
     try {
-      const iframe = document.querySelector(this.selectors.iframe);
-      if (iframe && iframe.contentDocument) {
-        return iframe.contentDocument;
+      // mainFrame 우선
+      const mainFrame = document.querySelector(this.selectors.iframe);
+      if (mainFrame && mainFrame.contentDocument) {
+        return mainFrame.contentDocument;
+      }
+      // 모든 iframe 시도
+      const iframes = document.querySelectorAll('iframe');
+      for (const iframe of iframes) {
+        try {
+          if (iframe.contentDocument && iframe.contentDocument.body &&
+              iframe.contentDocument.body.textContent.trim().length > 200) {
+            return iframe.contentDocument;
+          }
+        } catch (e) {}
       }
     } catch (e) {
-      console.log('[Extractor] iframe 접근 실패, 현재 document 사용');
+      console.log('[Extractor] iframe 접근 실패');
     }
     return document;
   },
@@ -76,20 +101,62 @@ const BlogExtractor = {
    * 본문 컨테이너 찾기
    */
   findContentContainer(doc) {
+    if (!doc) return null;
+    // 1차: 셀렉터로 텍스트가 충분한 컨테이너 찾기
     for (const selector of this.selectors.containers) {
-      const container = doc.querySelector(selector);
-      if (container && container.textContent.trim().length > 50) {
-        return container;
-      }
+      try {
+        const container = doc.querySelector(selector);
+        if (container && container.textContent.trim().length > 50) {
+          return container;
+        }
+      } catch (e) {}
     }
-    // 텍스트 길이 조건 없이 재시도
+    // 2차: 텍스트 길이 무관하게 셀렉터로 찾기
     for (const selector of this.selectors.containers) {
-      const container = doc.querySelector(selector);
-      if (container) {
-        return container;
-      }
+      try {
+        const container = doc.querySelector(selector);
+        if (container) {
+          return container;
+        }
+      } catch (e) {}
     }
-    return null;
+    // 3차: 스마트 탐색 - 텍스트가 가장 많은 div 찾기
+    return this.findLargestTextBlock(doc);
+  },
+
+  /**
+   * 텍스트가 가장 많은 블록 요소 찾기 (스마트 폴백)
+   */
+  findLargestTextBlock(doc) {
+    if (!doc || !doc.body) return null;
+    let bestElement = null;
+    let bestLength = 200; // 최소 200자 이상이어야 본문으로 인정
+
+    const candidates = doc.querySelectorAll('div, section, article, main');
+    candidates.forEach(el => {
+      // 네비게이션, 사이드바, 헤더, 푸터 제외
+      const tag = el.tagName.toLowerCase();
+      const cls = (el.className || '').toLowerCase();
+      const id = (el.id || '').toLowerCase();
+      if (cls.match(/nav|sidebar|footer|header|menu|comment|reply/) ||
+          id.match(/nav|sidebar|footer|header|menu|comment|reply/)) {
+        return;
+      }
+
+      const textLen = el.textContent.trim().length;
+      const childDivs = el.querySelectorAll('div').length;
+
+      // 텍스트가 충분하고 너무 깊지 않은 요소 선호
+      if (textLen > bestLength && childDivs < 100) {
+        bestLength = textLen;
+        bestElement = el;
+      }
+    });
+
+    if (bestElement) {
+      console.log('[Extractor] 스마트 탐색으로 본문 찾음:', bestElement.tagName, bestElement.className?.substring(0, 30));
+    }
+    return bestElement;
   },
 
   /**
@@ -257,16 +324,60 @@ const BlogExtractor = {
       }
     });
 
-    // 문단 시작 볼드 텍스트 (실제 소제목처럼 사용되는 경우만)
+    // 대괄호 텍스트 제외 헬퍼 (이미지 설명/카테고리 라벨)
+    const isBracketText = (text) => /^\[.+\]$/.test(text);
+
+    // 네이버 스마트에디터3 인용구 스타일 소제목
+    container.querySelectorAll('.se-quotation, .se-section-quotation').forEach(el => {
+      const text = el.textContent.trim();
+      if (text && text.length >= 3 && text.length <= 40 && !addedTexts.has(text) && !isBracketText(text)) {
+        addedTexts.add(text);
+        subheadings.push({
+          text: text,
+          type: 'quotation-heading',
+          level: 2
+        });
+      }
+    });
+
+    // blockquote 태그 (짧은 텍스트만 소제목으로 판단)
+    container.querySelectorAll('blockquote').forEach(el => {
+      const text = el.textContent.trim();
+      if (text && text.length >= 3 && text.length <= 40 && !addedTexts.has(text) && !isBracketText(text)) {
+        addedTexts.add(text);
+        subheadings.push({
+          text: text,
+          type: 'blockquote-heading',
+          level: 2
+        });
+      }
+    });
+
+    // 구분선 + 볼드/큰글씨 조합 (소제목으로 자주 사용)
+    container.querySelectorAll('.se-hr + .se-module-text, .se-section-horizontalLine + .se-section-text').forEach(el => {
+      const boldEl = el.querySelector('strong, b, .se-text-paragraph-align-center');
+      if (boldEl) {
+        const text = boldEl.textContent.trim();
+        if (text && text.length >= 3 && text.length <= 40 && !addedTexts.has(text) && !isBracketText(text)) {
+          addedTexts.add(text);
+          subheadings.push({
+            text: text,
+            type: 'separator-heading',
+            level: 2
+          });
+        }
+      }
+    });
+
+    // 문단 시작 볼드 텍스트 (볼드가 문단의 거의 전부인 경우만)
     container.querySelectorAll('.se-module-text').forEach(el => {
       const firstChild = el.querySelector('strong, b');
       if (firstChild) {
         const text = firstChild.textContent.trim();
         const parentText = el.textContent.trim();
-        // 문단 시작이 볼드이고, 10자 이상 30자 이하, 숫자나 번호로 시작하는 경우
-        if (text && text.length >= 10 && text.length <= 40 &&
-            parentText.startsWith(text) && !addedTexts.has(text) &&
-            (text.match(/^[0-9]+[.)]?\s*/) || text.match(/^[①②③④⑤⑥⑦⑧⑨⑩]/) || text.length >= 15)) {
+        if (text && text.length >= 5 && text.length <= 40 &&
+            parentText.startsWith(text) && !addedTexts.has(text) && !isBracketText(text) &&
+            text.length / parentText.length > 0.85) {
           addedTexts.add(text);
           subheadings.push({
             text: text,
@@ -284,14 +395,26 @@ const BlogExtractor = {
    * 전체 블로그 데이터 추출
    */
   extract() {
-    // 1) 우선 iframe document에서 시도
-    let doc = this.getIframeDocument();
+    console.log('[Extractor] 추출 시작 (프레임:', window.location.href.substring(0, 60), ')');
+
+    // 1) 현재 document에서 시도
+    let doc = document;
     let container = this.findContentContainer(doc);
 
-    // 2) 못 찾으면 모든 document 순회
+    // 2) 못 찾으면 iframe document에서 시도
+    if (!container) {
+      const iframeDoc = this.getIframeDocument();
+      if (iframeDoc !== document) {
+        container = this.findContentContainer(iframeDoc);
+        if (container) doc = iframeDoc;
+      }
+    }
+
+    // 3) 못 찾으면 모든 iframe document 순회
     if (!container) {
       const docs = this.getAllDocuments();
       for (const d of docs) {
+        if (d === document) continue; // 이미 시도함
         container = this.findContentContainer(d);
         if (container) {
           doc = d;
@@ -300,18 +423,8 @@ const BlogExtractor = {
       }
     }
 
-    // 3) 그래도 못 찾으면 현재 document의 body에서 텍스트가 충분한 영역 탐색
     if (!container) {
-      const body = document.body || document.documentElement;
-      if (body && body.textContent.trim().length > 100) {
-        container = body;
-        doc = document;
-        console.log('[Extractor] 본문 컨테이너 대신 body 사용');
-      }
-    }
-
-    if (!container) {
-      console.warn('[Extractor] 본문 컨테이너를 찾을 수 없습니다. (현재 프레임:', window.location.href.substring(0, 60), ')');
+      console.warn('[Extractor] 본문 컨테이너를 찾을 수 없습니다. (프레임:', window.location.href.substring(0, 60), ')');
       return null;
     }
 
@@ -367,8 +480,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       console.error('[Extractor] 추출 오류:', error);
       sendResponse({ success: false, error: error.message });
     }
+    return true;
   }
-  return true;  // 비동기 응답을 위해 true 반환
+
+  // 이 리스너가 처리하지 않는 메시지는 다른 리스너에게 넘기기
+  return false;
 });
 
 // 전역 노출

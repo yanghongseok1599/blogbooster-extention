@@ -1088,7 +1088,113 @@
       });
     }
 
+    // 리사이즈 핸들 추가
+    const resizeHandle = document.createElement('div');
+    resizeHandle.className = 'bb-resize-handle';
+    analysisSidebar.appendChild(resizeHandle);
+
     document.body.appendChild(analysisSidebar);
+
+    // 저장된 위치/크기 복원
+    try {
+      const saved = localStorage.getItem('bb-sidebar-pos');
+      if (saved) {
+        const pos = JSON.parse(saved);
+        analysisSidebar.style.left = pos.left + 'px';
+        analysisSidebar.style.top = pos.top + 'px';
+        if (pos.width) analysisSidebar.style.width = pos.width + 'px';
+        if (pos.height) {
+          analysisSidebar.style.height = pos.height + 'px';
+          analysisSidebar.style.maxHeight = 'none';
+        }
+        analysisSidebar.classList.add('bb-dragged');
+      }
+    } catch (e) {}
+
+    // 드래그 기능
+    const header = analysisSidebar.querySelector('.bb-sidebar-header');
+    let isDragging = false, dragStartX, dragStartY, sidebarStartX, sidebarStartY;
+
+    header.addEventListener('mousedown', (e) => {
+      if (e.target.closest('.bb-close-btn')) return;
+      isDragging = true;
+      const rect = analysisSidebar.getBoundingClientRect();
+      dragStartX = e.clientX;
+      dragStartY = e.clientY;
+      sidebarStartX = rect.left;
+      sidebarStartY = rect.top;
+      // 첫 드래그 시 transform 제거
+      if (!analysisSidebar.classList.contains('bb-dragged')) {
+        analysisSidebar.style.top = rect.top + 'px';
+        analysisSidebar.style.left = rect.left + 'px';
+        analysisSidebar.classList.add('bb-dragged');
+      }
+      e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (isDragging) {
+        const dx = e.clientX - dragStartX;
+        const dy = e.clientY - dragStartY;
+        analysisSidebar.style.left = Math.max(0, sidebarStartX + dx) + 'px';
+        analysisSidebar.style.top = Math.max(0, sidebarStartY + dy) + 'px';
+      }
+    });
+
+    document.addEventListener('mouseup', () => {
+      if (isDragging) {
+        isDragging = false;
+        saveSidebarPosition();
+      }
+    });
+
+    // 리사이즈 기능
+    let isResizing = false, resizeStartX, resizeStartY, startWidth, startHeight;
+
+    resizeHandle.addEventListener('mousedown', (e) => {
+      isResizing = true;
+      const rect = analysisSidebar.getBoundingClientRect();
+      resizeStartX = e.clientX;
+      resizeStartY = e.clientY;
+      startWidth = rect.width;
+      startHeight = rect.height;
+      if (!analysisSidebar.classList.contains('bb-dragged')) {
+        analysisSidebar.style.top = rect.top + 'px';
+        analysisSidebar.style.left = rect.left + 'px';
+        analysisSidebar.classList.add('bb-dragged');
+      }
+      e.preventDefault();
+      e.stopPropagation();
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (isResizing) {
+        const newW = Math.max(160, startWidth + (e.clientX - resizeStartX));
+        const newH = Math.max(200, startHeight + (e.clientY - resizeStartY));
+        analysisSidebar.style.width = newW + 'px';
+        analysisSidebar.style.height = newH + 'px';
+        analysisSidebar.style.maxHeight = 'none';
+      }
+    });
+
+    document.addEventListener('mouseup', () => {
+      if (isResizing) {
+        isResizing = false;
+        saveSidebarPosition();
+      }
+    });
+
+    function saveSidebarPosition() {
+      try {
+        const rect = analysisSidebar.getBoundingClientRect();
+        localStorage.setItem('bb-sidebar-pos', JSON.stringify({
+          left: Math.round(rect.left),
+          top: Math.round(rect.top),
+          width: Math.round(rect.width),
+          height: Math.round(rect.height)
+        }));
+      } catch (e) {}
+    }
 
     analysisSidebar.querySelector('.bb-close-btn').addEventListener('click', () => {
       analysisSidebar.classList.add('bb-hidden');

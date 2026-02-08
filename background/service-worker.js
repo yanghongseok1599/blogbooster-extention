@@ -11,6 +11,7 @@ importScripts('../lib/env-config.js');
 const ADMIN_EMAIL = ENV_CONFIG.adminEmail;
 
 const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-001:generateContent';
+const DEFAULT_GEMINI_API_KEY = 'AIzaSyBTkLbVrVB6ucdiGiQNuGeWbqOsFHBecp4';
 
 // YouTube API 설정
 const YOUTUBE_API_BASE = 'https://www.googleapis.com/youtube/v3';
@@ -1494,41 +1495,90 @@ async function getGeminiApiKeyFromFirebase() {
       return { success: false, error: '로그인이 필요합니다.' };
     }
 
-    // 2. API 설정 가져오기 (settings/apiKeys 문서)
-    const settingsUrl = `${FIRESTORE_BASE_URL}/settings/apiKeys`;
-    const settingsResponse = await fetch(settingsUrl, {
-      headers: token ? { 'Authorization': `Bearer ${token}` } : {}
-    });
+    // 2. API 키 결정 (Firestore settings 또는 기본 키)
+    let apiKey = DEFAULT_GEMINI_API_KEY;
+    let freeAccessEnabled = false;
 
-    if (!settingsResponse.ok) {
-      // 설정 문서가 없으면 로컬 스토리지 폴백
-      console.log('[Firebase] API 설정 문서 없음, 로컬 폴백');
-      const localResult = await chrome.storage.local.get(['serverGeminiApiKey']);
-      if (localResult.serverGeminiApiKey) {
-        return { success: true, apiKey: localResult.serverGeminiApiKey };
+    try {
+      const settingsUrl = `${FIRESTORE_BASE_URL}/settings/apiKeys`;
+      const settingsResponse = await fetch(settingsUrl, {
+        headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+      });
+
+      if (settingsResponse.ok) {
+        const settingsDoc = await settingsResponse.json();
+        const settings = firestoreDocToJson(settingsDoc);
+        if (settings && settings.geminiApiKey) {
+          apiKey = settings.geminiApiKey;
+        }
+        freeAccessEnabled = settings?.freeAccessEnabled || false;
       }
-      return { success: false, error: 'API 키가 설정되지 않았습니다.' };
+    } catch (e) {
+      console.log('[Firebase] API 설정 조회 실패, 기본 키 사용');
     }
 
-    const settingsDoc = await settingsResponse.json();
-    const settings = firestoreDocToJson(settingsDoc);
+    // 3. 접근 권한 확인 - Firestore에서 유저 플랜 직접 확인
+    const userEmail = userInfo.email;
+    const userUid = userInfo.uid;
+    let hasActivePlan = false;
 
-    if (!settings || !settings.geminiApiKey) {
-      return { success: false, error: 'API 키가 설정되지 않았습니다.' };
+    // 3-1. Firestore users 컬렉션에서 플랜 확인 (이메일 → UID 순서로 시도)
+    const idsToTry = [userEmail, userUid].filter(Boolean);
+    for (const docId of idsToTry) {
+      if (hasActivePlan) break;
+      try {
+        const userDocUrl = `${FIRESTORE_BASE_URL}/users/${encodeURIComponent(docId)}`;
+        const userDocResponse = await fetch(userDocUrl, {
+          headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+        });
+
+        if (userDocResponse.ok) {
+          const userDoc = await userDocResponse.json();
+          const userData = firestoreDocToJson(userDoc);
+          if (userData) {
+            const plan = userData.plan || 'free';
+            // planExpiry는 Firestore Timestamp 또는 Date 문자열일 수 있음
+            let expiresAt = 0;
+            const rawExpiry = userData.planExpiry || userData.planExpiresAt || userData.expiresAt;
+            if (rawExpiry) {
+              if (typeof rawExpiry === 'number') expiresAt = rawExpiry;
+              else if (rawExpiry.seconds) expiresAt = rawExpiry.seconds * 1000;
+              else if (typeof rawExpiry === 'string') expiresAt = new Date(rawExpiry).getTime();
+            }
+            const now = Date.now();
+
+            if (plan !== 'free' && expiresAt > now) {
+              hasActivePlan = true;
+              const daysLeft = Math.ceil((expiresAt - now) / (24 * 60 * 60 * 1000));
+              console.log(`[Firebase] Firestore 유료 플랜 확인: ${plan} (${daysLeft}일 남음) [docId: ${docId}]`);
+            }
+          }
+        }
+      } catch (e) {
+        console.log(`[Firebase] Firestore 유저 문서 조회 실패 [docId: ${docId}]`);
+      }
     }
 
-    // 3. 접근 권한 확인
-    const freeAccessEnabled = settings.freeAccessEnabled || false;
-    const userPlan = userInfo.plan || 'free';
-    const isPaidUser = userPlan !== 'free'; // pro, premium 등
-
-    // 유료 사용자이거나 무료 접근이 허용된 경우
-    if (isPaidUser || freeAccessEnabled) {
-      console.log('[Firebase] API 키 접근 허용:', isPaidUser ? '유료 사용자' : '무료 접근 허용됨');
-      return { success: true, apiKey: settings.geminiApiKey };
+    // 3-2. 로컬 userPlans 폴백 (프로모 코드로 활성화한 경우)
+    if (!hasActivePlan) {
+      const plansResult = await chrome.storage.local.get(['userPlans']);
+      const userPlans = plansResult.userPlans || {};
+      const planData = userPlans[userId];
+      const now = Date.now();
+      if (planData && planData.expiresAt > now) {
+        hasActivePlan = true;
+        const daysLeft = Math.ceil((planData.expiresAt - now) / (24 * 60 * 60 * 1000));
+        console.log(`[Firebase] 로컬 유료 플랜 확인 (${daysLeft}일 남음)`);
+      }
     }
 
-    // 무료 사용자이고 무료 접근이 비허용된 경우
+    // 유료 플랜이 활성 상태이거나 무료 접근이 허용된 경우
+    if (hasActivePlan || freeAccessEnabled) {
+      console.log('[Firebase] API 키 접근 허용:', hasActivePlan ? '유료 플랜' : '무료 접근 허용됨');
+      return { success: true, apiKey };
+    }
+
+    // 유료 플랜이 만료되었거나 없는 경우
     return {
       success: false,
       error: 'PRO 구독이 필요한 기능입니다.',
@@ -1570,7 +1620,8 @@ async function getAvailableGeminiApiKey() {
     return syncResult.geminiApiKey;
   }
 
-  return null;
+  // 4. 기본 API 키 폴백
+  return DEFAULT_GEMINI_API_KEY;
 }
 
 /**

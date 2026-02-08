@@ -536,6 +536,108 @@ document.addEventListener('DOMContentLoaded', async function() {
     return div.innerHTML;
   }
 
+  // ==================== API 키 관리 ====================
+
+  var apiKeyInput = document.getElementById('apiKeyInput');
+  var saveApiKeyBtn = document.getElementById('saveApiKeyBtn');
+  var deleteApiKeyBtn = document.getElementById('deleteApiKeyBtn');
+  var toggleApiKeyBtn = document.getElementById('toggleApiKeyBtn');
+  var toggleIcon = document.getElementById('toggleIcon');
+  var apiKeyStatusValue = document.getElementById('apiKeyStatusValue');
+
+  /**
+   * 저장된 API 키 로드
+   */
+  async function loadApiKey() {
+    try {
+      var result = await chrome.storage.sync.get(['geminiApiKey']);
+      if (result.geminiApiKey) {
+        var key = result.geminiApiKey;
+        apiKeyInput.value = key;
+        apiKeyInput.type = 'password';
+        apiKeyStatusValue.textContent = key.substring(0, 4) + '...' + key.substring(key.length - 3);
+        apiKeyStatusValue.classList.add('active');
+        deleteApiKeyBtn.style.display = 'inline-flex';
+      } else {
+        apiKeyStatusValue.textContent = '기본 키 사용 중';
+        apiKeyStatusValue.classList.remove('active');
+        deleteApiKeyBtn.style.display = 'none';
+      }
+    } catch (error) {
+      console.error('API 키 로드 오류:', error);
+    }
+  }
+
+  /**
+   * API 키 저장
+   */
+  async function saveApiKey() {
+    var key = apiKeyInput.value.trim();
+    if (!key) {
+      showToast('API 키를 입력해주세요.');
+      return;
+    }
+
+    if (!key.startsWith('AIza')) {
+      showToast('올바른 Gemini API 키 형식이 아닙니다.');
+      return;
+    }
+
+    saveApiKeyBtn.disabled = true;
+    saveApiKeyBtn.textContent = '저장 중...';
+
+    try {
+      await chrome.storage.sync.set({ geminiApiKey: key });
+      apiKeyStatusValue.textContent = key.substring(0, 4) + '...' + key.substring(key.length - 3);
+      apiKeyStatusValue.classList.add('active');
+      deleteApiKeyBtn.style.display = 'inline-flex';
+      showToast('API 키가 저장되었습니다.');
+    } catch (error) {
+      console.error('API 키 저장 오류:', error);
+      showToast('저장에 실패했습니다.');
+    } finally {
+      saveApiKeyBtn.disabled = false;
+      saveApiKeyBtn.textContent = '저장';
+    }
+  }
+
+  /**
+   * API 키 삭제
+   */
+  async function deleteApiKey() {
+    if (!confirm('개인 API 키를 삭제하시겠습니까?\n기본 공유 키로 전환됩니다.')) {
+      return;
+    }
+
+    try {
+      await chrome.storage.sync.remove(['geminiApiKey']);
+      apiKeyInput.value = '';
+      apiKeyStatusValue.textContent = '기본 키 사용 중';
+      apiKeyStatusValue.classList.remove('active');
+      deleteApiKeyBtn.style.display = 'none';
+      showToast('API 키가 삭제되었습니다.');
+    } catch (error) {
+      console.error('API 키 삭제 오류:', error);
+      showToast('삭제에 실패했습니다.');
+    }
+  }
+
+  /**
+   * API 키 보기/숨기기 토글
+   */
+  function toggleApiKeyVisibility() {
+    if (apiKeyInput.type === 'password') {
+      apiKeyInput.type = 'text';
+      toggleIcon.textContent = '🔒';
+    } else {
+      apiKeyInput.type = 'password';
+      toggleIcon.textContent = '👁';
+    }
+  }
+
+  // 페이지 로드 시 API 키 로드
+  loadApiKey();
+
   /**
    * 뒤로가기
    */
@@ -555,6 +657,11 @@ document.addEventListener('DOMContentLoaded', async function() {
   resetPasswordBtn.addEventListener('click', resetPassword);
   logoutBtn.addEventListener('click', logout);
   clearLearningBtn.addEventListener('click', clearLearningData);
+
+  // API 키 이벤트
+  saveApiKeyBtn.addEventListener('click', saveApiKey);
+  deleteApiKeyBtn.addEventListener('click', deleteApiKey);
+  toggleApiKeyBtn.addEventListener('click', toggleApiKeyVisibility);
 
   // 모달 이벤트
   modalClose.addEventListener('click', hidePostDetail);
