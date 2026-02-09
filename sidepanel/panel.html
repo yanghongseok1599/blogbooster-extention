@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>블로그 부스터 Pro - 상세분석</title>
+  <link rel="icon" type="image/png" sizes="16x16" href="../icons/icon16.png">
+  <link rel="icon" type="image/png" sizes="48x48" href="../icons/icon48.png">
+  <link rel="stylesheet" href="panel.css">
+</head>
+<body>
+  <!-- 로그인 필요 화면 -->
+  <div class="login-required" id="loginRequired" style="display: none;">
+    <div class="login-content">
+      <span class="login-icon">🔐</span>
+      <h2>로그인이 필요합니다</h2>
+      <p>블로그 부스터 Pro를 사용하려면 로그인해주세요.</p>
+      <button class="login-btn" id="openLoginBtn">로그인 / 회원가입</button>
+    </div>
+  </div>
+
+  <div class="panel-container" id="mainContent">
+    <!-- 헤더 -->
+    <header class="panel-header">
+      <div class="header-title">
+        <span class="logo-icon">🚀</span>
+        <h1>블로그 부스터 Pro</h1>
+      </div>
+      <div class="header-actions">
+        <button class="capture-btn" id="captureBtn" title="블로그 글 캡처">📷</button>
+        <button class="seo-panel-btn" id="seoPanelBtn" title="SEO 분석 패널 열기">📊</button>
+        <button class="user-btn" id="userBtn" title="내 정보">👤</button>
+        <button class="refresh-btn" id="refreshBtn" title="다시 분석">🔄</button>
+      </div>
+    </header>
+
+    <!-- 사용자 드롭다운 -->
+    <div class="user-dropdown" id="userDropdown" style="display: none;">
+      <div class="user-info-box">
+        <div class="user-name" id="userName">사용자</div>
+        <div class="user-email" id="userEmail">email@example.com</div>
+        <div class="user-plan" id="userPlan"><span class="plan-badge free">무료 플랜</span></div>
+      </div>
+      <button class="mypage-btn" id="mypageBtn">👤 마이페이지</button>
+      <button class="admin-btn" id="adminBtn" style="display: none;">⚙️ 관리자 페이지</button>
+      <button class="logout-btn" id="logoutBtn">로그아웃</button>
+    </div>
+
+    <!-- 분석하기 버튼 -->
+    <div class="analyze-section">
+      <button class="analyze-btn" id="analyzeBtn">
+        <span class="btn-icon">🔍</span>
+        <span class="btn-text">이 글 분석하기</span>
+      </button>
+      <p class="analyze-hint">네이버 블로그 페이지에서 사용하세요</p>
+    </div>
+
+    <!-- YouTube 변환 섹션 -->
+    <div class="youtube-section" id="youtubeSection">
+      <div class="youtube-header">
+        <span class="youtube-icon">▶️</span>
+        <span class="youtube-title">YouTube → 블로그 변환</span>
+        <span class="youtube-usage" id="youtubeUsage">오늘 3/3건 남음</span>
+      </div>
+      <div class="youtube-input-group">
+        <input type="text" id="youtubeUrl" class="youtube-input" placeholder="YouTube URL을 붙여넣으세요" />
+        <button class="youtube-analyze-btn" id="youtubeAnalyzeBtn">분석</button>
+      </div>
+      <p class="youtube-hint">또는 YouTube 페이지에서 직접 사용하세요</p>
+
+      <!-- YouTube 분석 결과 섹션 (숨김 상태) -->
+      <div class="youtube-analysis-result" id="youtubeAnalysisResult" style="display: none;">
+        <div class="youtube-video-preview" id="youtubeVideoPreview">
+          <!-- 영상 정보가 여기 표시됩니다 -->
+        </div>
+        <div class="youtube-prompt-group">
+          <label for="youtubeCustomPrompt">추가 요청사항 (선택)</label>
+          <textarea id="youtubeCustomPrompt" rows="2" placeholder="예: 전문적인 느낌으로 작성해줘, 이모지 많이 써줘"></textarea>
+        </div>
+        <button class="youtube-generate-btn" id="youtubeGenerateBtn">
+          <span>✨</span> AI로 블로그 글 생성하기
+        </button>
+      </div>
+    </div>
+
+    <!-- 요약 카드 -->
+    <div class="summary-card" id="summaryCard">
+      <div class="summary-header">
+        <h2 class="blog-title" id="blogTitle">분석 대기 중...</h2>
+        <span class="seo-badge" id="seoBadge" title="클릭하여 상세 보기">-</span>
+      </div>
+      <div class="summary-stats">
+        <div class="stat-pill">
+          <span class="stat-icon">📝</span>
+          <span id="summaryCharCount">-</span>자
+        </div>
+        <div class="stat-pill">
+          <span class="stat-icon">📄</span>
+          <span id="summaryParagraphCount">-</span>개 문단
+        </div>
+        <div class="stat-pill">
+          <span class="stat-icon">🖼️</span>
+          <span id="summaryImageCount">-</span>장
+        </div>
+      </div>
+      <!-- SEO 점수 상세 -->
+      <div class="seo-detail" id="seoDetail" style="display: none;">
+        <div class="seo-detail-title">📊 SEO 점수 상세</div>
+        <div class="seo-factors" id="seoFactors">
+          <div class="seo-factor" data-factor="title_keyword">
+            <span class="factor-icon" id="factorIconTitle">❌</span>
+            <span class="factor-name">제목에 키워드</span>
+            <span class="factor-score" id="factorScoreTitle">0/25</span>
+          </div>
+          <div class="seo-factor" data-factor="keyword_density">
+            <span class="factor-icon" id="factorIconDensity">❌</span>
+            <span class="factor-name">키워드 밀도 (1~3%)</span>
+            <span class="factor-score" id="factorScoreDensity">0/20</span>
+          </div>
+          <div class="seo-factor" data-factor="content_length">
+            <span class="factor-icon" id="factorIconLength">❌</span>
+            <span class="factor-name">글 길이 (1500자+)</span>
+            <span class="factor-score" id="factorScoreLength">0/20</span>
+          </div>
+          <div class="seo-factor" data-factor="images">
+            <span class="factor-icon" id="factorIconImages">❌</span>
+            <span class="factor-name">이미지 (3장+)</span>
+            <span class="factor-score" id="factorScoreImages">0/15</span>
+          </div>
+          <div class="seo-factor" data-factor="subheadings">
+            <span class="factor-icon" id="factorIconSubheadings">❌</span>
+            <span class="factor-name">소제목 (2개+)</span>
+            <span class="factor-score" id="factorScoreSubheadings">0/10</span>
+          </div>
+          <div class="seo-factor" data-factor="tags">
+            <span class="factor-icon" id="factorIconTags">❌</span>
+            <span class="factor-name">태그 (5개+)</span>
+            <span class="factor-score" id="factorScoreTags">0/10</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 학습 현황 배너 -->
+    <div class="learning-banner" id="learningBanner">
+      <div class="learning-icon">🧠</div>
+      <div class="learning-info">
+        <span class="learning-label">AI 학습 현황</span>
+        <span class="learning-count" id="learningCount">0개 글 학습됨</span>
+      </div>
+      <div class="learning-score" id="learningScore" title="평균 SEO 점수">-</div>
+    </div>
+
+    <!-- 탭 네비게이션 -->
+    <nav class="tab-nav">
+      <button class="tab-btn active" data-tab="structure">
+        <span>📐</span> 구조
+      </button>
+      <button class="tab-btn" data-tab="keyword">
+        <span>🔑</span> 키워드
+      </button>
+      <button class="tab-btn" data-tab="style">
+        <span>✏️</span> 스타일
+      </button>
+      <button class="tab-btn" data-tab="generate">
+        <span>✨</span> 생성
+      </button>
+    </nav>
+
+    <!-- 탭 컨텐츠 -->
+    <div class="tab-content">
+      <!-- 구조 탭 -->
+      <div class="tab-pane active" id="structureTab">
+        <div class="card">
+          <h3 class="card-title">서론/본론/결론 비율</h3>
+          <div class="structure-bars">
+            <div class="bar-item">
+              <div class="bar-label">
+                <span>서론</span>
+                <span id="introPercent">0%</span>
+              </div>
+              <div class="bar-track">
+                <div class="bar-fill intro" id="introBar" style="width: 0%"></div>
+              </div>
+            </div>
+            <div class="bar-item">
+              <div class="bar-label">
+                <span>본론</span>
+                <span id="bodyPercent">0%</span>
+              </div>
+              <div class="bar-track">
+                <div class="bar-fill body" id="bodyBar" style="width: 0%"></div>
+              </div>
+            </div>
+            <div class="bar-item">
+              <div class="bar-label">
+                <span>결론</span>
+                <span id="conclusionPercent">0%</span>
+              </div>
+              <div class="bar-track">
+                <div class="bar-fill conclusion" id="conclusionBar" style="width: 0%"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3 class="card-title">문단 통계</h3>
+          <div class="stats-list">
+            <div class="stats-row">
+              <span class="stats-label">평균 문단 길이</span>
+              <span class="stats-value" id="avgParagraphLength">-자</span>
+            </div>
+            <div class="stats-row">
+              <span class="stats-label">평균 문장 길이</span>
+              <span class="stats-value" id="avgSentenceLength">-자</span>
+            </div>
+            <div class="stats-row">
+              <span class="stats-label">소제목 개수</span>
+              <span class="stats-value" id="subheadingCount">-개</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3 class="card-title">이미지 배치 패턴</h3>
+          <div class="image-pattern">
+            <span class="pattern-badge" id="imagePattern">-</span>
+            <span class="pattern-desc" id="imagePatternDesc">-</span>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3 class="card-title">소제목 목록</h3>
+          <ul class="subheading-list" id="subheadingList">
+            <li class="empty-state">소제목이 없습니다</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- 키워드 탭 -->
+      <div class="tab-pane" id="keywordTab">
+        <div class="card">
+          <h3 class="card-title">메인 키워드</h3>
+          <div class="main-keyword-box">
+            <span class="main-keyword" id="mainKeywordDisplay">-</span>
+            <span class="keyword-density">밀도: <strong id="keywordDensity">0%</strong></span>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3 class="card-title">서브 키워드 Top 10</h3>
+          <div class="keyword-tags" id="subKeywordTags">
+            <span class="empty-state">키워드를 분석 중입니다...</span>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3 class="card-title">키워드 위치맵</h3>
+          <div class="position-map" id="positionMap">
+            <div class="position-item" data-position="title">
+              <span class="position-icon">📌</span>
+              <span class="position-name">제목</span>
+              <span class="position-status" id="posTitle">❌</span>
+            </div>
+            <div class="position-item" data-position="firstParagraph">
+              <span class="position-icon">1️⃣</span>
+              <span class="position-name">첫 문단</span>
+              <span class="position-status" id="posFirst">❌</span>
+            </div>
+            <div class="position-item" data-position="subheadings">
+              <span class="position-icon">📝</span>
+              <span class="position-name">소제목</span>
+              <span class="position-status" id="posSubheading">❌</span>
+            </div>
+            <div class="position-item" data-position="middle">
+              <span class="position-icon">📄</span>
+              <span class="position-name">중간</span>
+              <span class="position-status" id="posMiddle">❌</span>
+            </div>
+            <div class="position-item" data-position="lastParagraph">
+              <span class="position-icon">🔚</span>
+              <span class="position-name">마지막</span>
+              <span class="position-status" id="posLast">❌</span>
+            </div>
+            <div class="position-item" data-position="tags">
+              <span class="position-icon">🏷️</span>
+              <span class="position-name">태그</span>
+              <span class="position-status" id="posTags">❌</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3 class="card-title">원본 태그</h3>
+          <div class="keyword-tags original-tags" id="originalTags">
+            <span class="empty-state">태그가 없습니다</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 스타일 탭 -->
+      <div class="tab-pane" id="styleTab">
+        <div class="card">
+          <h3 class="card-title">문장 유형 분포</h3>
+          <div class="sentence-chart">
+            <div class="chart-bar">
+              <div class="chart-segment statement" id="statementBar" style="width: 0%">
+                <span class="segment-label">서술형</span>
+              </div>
+              <div class="chart-segment question" id="questionBar" style="width: 0%">
+                <span class="segment-label">질문형</span>
+              </div>
+              <div class="chart-segment exclamation" id="exclamationBar" style="width: 0%">
+                <span class="segment-label">감탄형</span>
+              </div>
+            </div>
+            <div class="chart-legend">
+              <div class="legend-item">
+                <span class="legend-color statement"></span>
+                <span>서술형 <strong id="statementPercent">0%</strong></span>
+              </div>
+              <div class="legend-item">
+                <span class="legend-color question"></span>
+                <span>질문형 <strong id="questionPercent">0%</strong></span>
+              </div>
+              <div class="legend-item">
+                <span class="legend-color exclamation"></span>
+                <span>감탄형 <strong id="exclamationPercent">0%</strong></span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3 class="card-title">어조 분석</h3>
+          <div class="tone-analysis">
+            <div class="tone-badge" id="toneBadge">-</div>
+            <div class="tone-details">
+              <div class="detail-row">
+                <span>문체</span>
+                <span id="writingStyle">-</span>
+              </div>
+              <div class="detail-row">
+                <span>평균 문장</span>
+                <span id="avgSentence">-자</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3 class="card-title">첫 문장 후킹</h3>
+          <div class="hook-analysis">
+            <span class="hook-type" id="hookType">-</span>
+            <span class="hook-desc" id="hookDesc">-</span>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3 class="card-title">이모지 사용</h3>
+          <div class="emoji-analysis">
+            <div class="emoji-count">
+              <span class="count-num" id="emojiCount">0</span>
+              <span class="count-label">개 사용</span>
+            </div>
+            <div class="emoji-list" id="emojiList">
+              <span class="empty-state">이모지 없음</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 생성 탭 -->
+      <div class="tab-pane" id="generateTab">
+        <div class="card">
+          <h3 class="card-title">새 글 키워드</h3>
+          <div class="form-group">
+            <label for="newMainKeyword">메인 키워드</label>
+            <input type="text" id="newMainKeyword" placeholder="예: 서울 카페 추천" />
+          </div>
+          <div class="form-group">
+            <label for="newSubKeywords">서브 키워드 (쉼표로 구분)</label>
+            <input type="text" id="newSubKeywords" placeholder="예: 인스타 감성, 디저트, 브런치" />
+          </div>
+        </div>
+
+        <div class="card">
+          <h3 class="card-title">사업장 정보</h3>
+          <div class="form-group">
+            <label for="businessName">사업장/브랜드명</label>
+            <input type="text" id="businessName" placeholder="예: 바디프로짐 가양점" />
+          </div>
+          <div class="form-group">
+            <label for="businessInfo">사업장 특징 (선택)</label>
+            <input type="text" id="businessInfo" placeholder="예: 24시간 운영, 1:1 PT 전문" />
+          </div>
+          <div class="form-group">
+            <label for="writerRole">작성자 역할</label>
+            <input type="text" id="writerRole" placeholder="예: 트레이너, 센터장, 필라테스강사" />
+            <div class="role-suggestions">
+              <span class="role-tag" data-role="대표">대표</span>
+              <span class="role-tag" data-role="헬스장 관장">헬스장 관장</span>
+              <span class="role-tag" data-role="트레이너">트레이너</span>
+              <span class="role-tag" data-role="센터장">센터장</span>
+              <span class="role-tag" data-role="재활트레이너">재활트레이너</span>
+              <span class="role-tag" data-role="필라테스강사">필라테스강사</span>
+              <span class="role-tag" data-role="FC">FC</span>
+              <span class="role-tag" data-role="회원">회원</span>
+              <span class="role-tag" data-role="체험단">체험단</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3 class="card-title">생성 옵션</h3>
+          <div class="form-group">
+            <label>독창성 레벨</label>
+            <div class="radio-group">
+              <label class="radio-label">
+                <input type="radio" name="creativity" value="참고용" />
+                <span class="radio-text">참고용</span>
+              </label>
+              <label class="radio-label">
+                <input type="radio" name="creativity" value="재해석" checked />
+                <span class="radio-text">재해석</span>
+              </label>
+              <label class="radio-label">
+                <input type="radio" name="creativity" value="창작" />
+                <span class="radio-text">창작</span>
+              </label>
+            </div>
+            <div class="creativity-desc" id="creativityDesc">
+              <small>재해석: 원본 구조를 유지하면서 새로운 표현으로 작성</small>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>글 길이</label>
+            <div class="radio-group">
+              <label class="radio-label">
+                <input type="radio" name="length" value="80" />
+                <span class="radio-text">80%</span>
+              </label>
+              <label class="radio-label">
+                <input type="radio" name="length" value="100" checked />
+                <span class="radio-text">100%</span>
+              </label>
+              <label class="radio-label">
+                <input type="radio" name="length" value="120" />
+                <span class="radio-text">120%</span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3 class="card-title">AI 추가 요청사항</h3>
+          <div class="form-group">
+            <textarea id="aiCustomRequest" rows="3" placeholder="예: 전문적인 느낌으로 작성해줘, 이모지 많이 써줘, 친근한 말투로 써줘"></textarea>
+            <small class="input-hint">AI에게 추가로 요청할 사항이 있으면 입력하세요</small>
+          </div>
+        </div>
+
+        <button class="generate-btn" id="generateBtn">
+          <span>✨</span> AI로 글 생성하기
+        </button>
+
+        <div class="card result-card" id="resultCard" style="display: none;">
+          <div class="result-header">
+            <h3 class="card-title">생성된 글</h3>
+            <button class="copy-btn" id="copyBtn">📋 복사</button>
+          </div>
+
+          <!-- 금칙어 검토 결과 -->
+          <div id="bannedWordResult" class="banned-word-result"></div>
+
+          <div class="result-content" id="resultContent">
+            <!-- 생성된 글이 여기 표시됩니다 -->
+          </div>
+
+          <!-- 이미지 프롬프트 섹션 -->
+          <div id="imagePromptsSection" class="image-prompts-section" style="display: none;">
+            <h4 class="section-title">🖼️ 필요한 이미지 목록</h4>
+            <div id="imagePromptsList" class="image-prompts-list"></div>
+            <button class="copy-all-prompts-btn" id="copyAllPromptsBtn">
+              프롬프트 전체복사
+            </button>
+            <button class="image-gen-btn" id="imageGenBtn">
+              이미지 생성하기
+            </button>
+            <p class="image-gen-tip">
+              💡 프롬프트 복사 후 Gemini에서 이미지를 생성하세요
+            </p>
+          </div>
+
+          <!-- 블로그 복사 섹션 -->
+          <div id="typingSection" class="typing-section">
+            <h4 class="section-title">📋 블로그에 붙여넣기</h4>
+            <p class="typing-desc">버튼을 누르면 클립보드에 복사됩니다</p>
+
+            <button class="typing-btn" id="startTypingBtn">
+              📋 클립보드에 복사
+            </button>
+
+            <p class="typing-hint" style="font-size: 12px; color: #666; margin-top: 8px;">
+              복사 후 네이버 블로그 본문에서 <strong>Ctrl+V</strong>
+            </p>
+
+
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- 하단 광고 배너 -->
+    <div class="ad-banner">
+      <a href="https://trainer-milestone.com/" target="_blank" rel="noopener noreferrer" class="ad-banner-link">
+        <img src="../icons/banner-ad.png" alt="트레이너 마일스톤" class="ad-banner-img">
+        <div class="ad-banner-cta">피트니스 자동화 마케팅 문의하기</div>
+      </a>
+    </div>
+
+    <!-- 분석 옵션 모달 -->
+    <div class="analysis-modal" id="analysisModal" style="display: none;">
+      <div class="modal-backdrop"></div>
+      <div class="modal-content">
+        <h3 class="modal-title">분석 옵션 선택</h3>
+        <p class="modal-desc">분석 후 학습 여부를 선택하세요</p>
+        <div class="modal-buttons">
+          <button class="modal-btn copy-only" id="analysisCopyOnly">
+            <span class="btn-icon">📋</span>
+            <span class="btn-text">분석만 하기</span>
+            <span class="btn-desc">학습 없이 구조만 분석</span>
+          </button>
+          <button class="modal-btn with-learn" id="analysisWithLearn">
+            <span class="btn-icon">🧠</span>
+            <span class="btn-text">분석 + 학습</span>
+            <span class="btn-desc">AI 학습 데이터에 추가</span>
+          </button>
+        </div>
+        <button class="modal-close" id="analysisModalClose">✕</button>
+      </div>
+    </div>
+
+    <!-- 로딩 오버레이 -->
+    <div class="loading-overlay" id="loadingOverlay" style="display: none;">
+      <div class="loading-spinner"></div>
+      <p class="loading-text">분석 중...</p>
+    </div>
+  </div>
+
+  <script src="../lib/learning-engine.js"></script>
+  <script src="panel.js"></script>
+</body>
+</html>

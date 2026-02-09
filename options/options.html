@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>블로그 부스터 Pro - 설정</title>
+  <link rel="icon" type="image/png" sizes="16x16" href="../icons/icon16.png">
+  <link rel="icon" type="image/png" sizes="48x48" href="../icons/icon48.png">
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <div class="options-container">
+    <header class="options-header">
+      <div class="logo">
+        <span class="logo-icon">🚀</span>
+        <h1>블로그 부스터 Pro</h1>
+      </div>
+      <span class="version">v2.0.0</span>
+    </header>
+
+    <main class="options-main">
+      <!-- 분석 히스토리 -->
+      <section class="settings-section">
+        <h2 class="section-title">
+          <span>📜</span> 분석 히스토리
+        </h2>
+
+        <div class="setting-card">
+          <div class="setting-header">
+            <h3>저장된 분석 결과</h3>
+            <button class="text-btn" id="clearHistoryBtn">전체 삭제</button>
+          </div>
+          <p class="setting-desc">
+            최근 분석한 블로그 글 목록입니다. (최대 50개)
+          </p>
+          <div class="history-list" id="historyList">
+            <div class="empty-state">분석 기록이 없습니다</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 사용법 -->
+      <section class="settings-section">
+        <h2 class="section-title">
+          <span>📖</span> 사용법
+        </h2>
+
+        <div class="setting-card">
+          <div class="usage-steps">
+            <div class="step">
+              <span class="step-num">1</span>
+              <div class="step-content">
+                <h4>네이버 블로그 방문</h4>
+                <p>분석하고 싶은 파워블로거의 글을 열어주세요.</p>
+              </div>
+            </div>
+            <div class="step">
+              <span class="step-num">2</span>
+              <div class="step-content">
+                <h4>분석 실행</h4>
+                <p>확장 프로그램 아이콘을 클릭하고 "이 글 분석하기" 버튼을 누르세요.</p>
+              </div>
+            </div>
+            <div class="step">
+              <span class="step-num">3</span>
+              <div class="step-content">
+                <h4>상세 분석 확인</h4>
+                <p>사이드패널에서 구조, 키워드, 스타일 분석 결과를 확인하세요.</p>
+              </div>
+            </div>
+            <div class="step">
+              <span class="step-num">4</span>
+              <div class="step-content">
+                <h4>AI 글 생성</h4>
+                <p>분석된 구조를 바탕으로 새로운 키워드의 글을 생성하세요.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 정보 -->
+      <section class="settings-section">
+        <h2 class="section-title">
+          <span>ℹ️</span> 정보
+        </h2>
+
+        <div class="setting-card info-card">
+          <div class="info-row">
+            <span>버전</span>
+            <span>2.0.0</span>
+          </div>
+          <div class="info-row">
+            <span>제작</span>
+            <span>Blog Booster Pro Team</span>
+          </div>
+          <div class="info-row">
+            <span>지원 브라우저</span>
+            <span>Chrome, Whale (Manifest V3)</span>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="options-footer">
+      <p>© 2025 블로그 부스터 Pro. All rights reserved.</p>
+    </footer>
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>
