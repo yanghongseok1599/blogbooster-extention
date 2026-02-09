@@ -1,0 +1,345 @@
+/* 블로그 부스터 Pro - 웹 로그인/회원가입 스타일 */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.auth-container {
+  width: 100%;
+  max-width: 400px;
+  background: white;
+  border-radius: 20px;
+  padding: 32px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+}
+
+/* 로고 */
+.auth-logo {
+  text-align: center;
+  margin-bottom: 24px;
+}
+
+.logo-icon {
+  font-size: 48px;
+  display: block;
+  margin-bottom: 8px;
+}
+
+.auth-logo h1 {
+  font-size: 24px;
+  font-weight: 700;
+  background: linear-gradient(135deg, #667eea, #764ba2);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* 탭 */
+.auth-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 24px;
+  background: #f5f5f5;
+  padding: 4px;
+  border-radius: 12px;
+}
+
+.tab-btn {
+  flex: 1;
+  padding: 12px;
+  border: none;
+  background: transparent;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #666;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.tab-btn.active {
+  background: white;
+  color: #667eea;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.tab-btn:hover:not(.active) {
+  color: #333;
+}
+
+/* 폼 */
+.auth-form {
+  display: none;
+}
+
+.auth-form.active {
+  display: block;
+}
+
+.form-group {
+  margin-bottom: 16px;
+}
+
+.form-group label {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  color: #333;
+  margin-bottom: 6px;
+}
+
+.form-group input[type="text"],
+.form-group input[type="email"],
+.form-group input[type="password"] {
+  width: 100%;
+  padding: 14px 16px;
+  border: 2px solid #e0e0e0;
+  border-radius: 10px;
+  font-size: 14px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.form-group input:focus {
+  outline: none;
+  border-color: #667eea;
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+}
+
+.form-group input::placeholder {
+  color: #aaa;
+}
+
+/* 체크박스 */
+.checkbox-group {
+  margin-top: 8px;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #666;
+  line-height: 1.4;
+}
+
+.checkbox-label input[type="checkbox"] {
+  display: none;
+}
+
+.checkmark {
+  width: 20px;
+  height: 20px;
+  min-width: 20px;
+  border: 2px solid #ddd;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+
+.checkbox-label input[type="checkbox"]:checked + .checkmark {
+  background: linear-gradient(135deg, #667eea, #764ba2);
+  border-color: #667eea;
+}
+
+.checkbox-label input[type="checkbox"]:checked + .checkmark::after {
+  content: '✓';
+  color: white;
+  font-size: 12px;
+  font-weight: bold;
+}
+
+/* 버튼 */
+.auth-btn {
+  width: 100%;
+  padding: 14px;
+  border: none;
+  border-radius: 10px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  margin-top: 8px;
+}
+
+.auth-btn.primary {
+  background: linear-gradient(135deg, #667eea, #764ba2);
+  color: white;
+  box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+}
+
+.auth-btn.primary:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(102, 126, 234, 0.5);
+}
+
+.auth-btn.primary:active {
+  transform: translateY(0);
+}
+
+.auth-btn:disabled {
+  background: #ccc;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.btn-loading {
+  animation: spin 1s linear infinite;
+  display: inline-block;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* 링크 */
+.forgot-link,
+.back-link {
+  display: block;
+  text-align: center;
+  margin-top: 16px;
+  color: #667eea;
+  text-decoration: none;
+  font-size: 13px;
+}
+
+.forgot-link:hover,
+.back-link:hover {
+  text-decoration: underline;
+}
+
+/* 비밀번호 재설정 설명 */
+.reset-desc {
+  font-size: 13px;
+  color: #666;
+  text-align: center;
+  margin-bottom: 20px;
+  line-height: 1.5;
+}
+
+/* 메시지 */
+.auth-message {
+  margin-top: 16px;
+  padding: 12px 16px;
+  border-radius: 10px;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.auth-message.success {
+  background: rgba(76, 175, 80, 0.1);
+  color: #2e7d32;
+  border: 1px solid rgba(76, 175, 80, 0.3);
+}
+
+.auth-message.error {
+  background: rgba(244, 67, 54, 0.1);
+  color: #c62828;
+  border: 1px solid rgba(244, 67, 54, 0.3);
+}
+
+.auth-message.info {
+  background: rgba(33, 150, 243, 0.1);
+  color: #1565c0;
+  border: 1px solid rgba(33, 150, 243, 0.3);
+}
+
+/* 프로모션 코드 */
+.promo-group {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px dashed #e0e0e0;
+}
+
+.promo-input-wrapper {
+  display: flex;
+  gap: 8px;
+}
+
+.promo-input-wrapper input {
+  flex: 1;
+  text-transform: uppercase;
+  font-family: 'Monaco', 'Consolas', monospace;
+  letter-spacing: 1px;
+}
+
+.promo-check-btn {
+  padding: 12px 16px;
+  background: #f5f5f5;
+  border: 2px solid #e0e0e0;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #666;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.promo-check-btn:hover {
+  background: #e0e0e0;
+  color: #333;
+}
+
+.promo-check-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.promo-result {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.promo-result.success {
+  background: linear-gradient(135deg, rgba(76, 175, 80, 0.1), rgba(129, 199, 132, 0.1));
+  color: #2e7d32;
+  border: 1px solid rgba(76, 175, 80, 0.3);
+}
+
+.promo-result.error {
+  background: rgba(244, 67, 54, 0.1);
+  color: #c62828;
+  border: 1px solid rgba(244, 67, 54, 0.3);
+}
+
+.promo-result .promo-icon {
+  font-size: 14px;
+}
+
+/* 반응형 */
+@media (max-width: 480px) {
+  .auth-container {
+    padding: 24px 20px;
+  }
+
+  .logo-icon {
+    font-size: 40px;
+  }
+
+  .auth-logo h1 {
+    font-size: 20px;
+  }
+}
