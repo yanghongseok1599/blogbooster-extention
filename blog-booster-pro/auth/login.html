@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>블로그 부스터 Pro - 로그인</title>
+  <link rel="icon" type="image/png" sizes="16x16" href="../icons/icon16.png">
+  <link rel="icon" type="image/png" sizes="48x48" href="../icons/icon48.png">
+  <link rel="stylesheet" href="login.css">
+</head>
+<body>
+  <div class="auth-container">
+    <!-- 로고 -->
+    <div class="auth-logo">
+      <span class="logo-icon">🚀</span>
+      <h1>블로그 부스터 Pro</h1>
+    </div>
+
+    <!-- 탭 -->
+    <div class="auth-tabs">
+      <button class="tab-btn active" data-tab="login">로그인</button>
+      <button class="tab-btn" data-tab="signup">회원가입</button>
+    </div>
+
+    <!-- 로그인 폼 -->
+    <form class="auth-form active" id="loginForm">
+      <div class="form-group">
+        <label for="loginEmail">이메일</label>
+        <input type="email" id="loginEmail" placeholder="이메일을 입력하세요" required>
+      </div>
+      <div class="form-group">
+        <label for="loginPassword">비밀번호</label>
+        <input type="password" id="loginPassword" placeholder="비밀번호를 입력하세요" required>
+      </div>
+      <button type="submit" class="auth-btn primary">
+        <span class="btn-text">로그인</span>
+        <span class="btn-loading" style="display: none;">⏳</span>
+      </button>
+      <a href="#" class="forgot-link" id="forgotPassword">비밀번호를 잊으셨나요?</a>
+    </form>
+
+    <!-- 회원가입 폼 -->
+    <form class="auth-form" id="signupForm">
+      <div class="form-group">
+        <label for="signupName">이름</label>
+        <input type="text" id="signupName" placeholder="실명을 입력하세요" required>
+      </div>
+      <div class="form-group">
+        <label for="signupNickname">닉네임</label>
+        <input type="text" id="signupNickname" placeholder="닉네임을 입력하세요" required>
+      </div>
+      <div class="form-group">
+        <label for="signupEmail">이메일</label>
+        <input type="email" id="signupEmail" placeholder="이메일을 입력하세요" required>
+      </div>
+      <div class="form-group">
+        <label for="signupPassword">비밀번호</label>
+        <input type="password" id="signupPassword" placeholder="비밀번호 (6자 이상)" required minlength="6">
+      </div>
+      <div class="form-group">
+        <label for="signupPasswordConfirm">비밀번호 확인</label>
+        <input type="password" id="signupPasswordConfirm" placeholder="비밀번호를 다시 입력하세요" required>
+      </div>
+      <div class="form-group checkbox-group">
+        <label class="checkbox-label">
+          <input type="checkbox" id="agreeTerms" required>
+          <span class="checkmark"></span>
+          <span>이용약관 및 개인정보처리방침에 동의합니다</span>
+        </label>
+      </div>
+      <div class="form-group promo-group">
+        <label for="promoCode">프로모션 코드 (선택)</label>
+        <div class="promo-input-wrapper">
+          <input type="text" id="promoCode" placeholder="코드가 있다면 입력하세요" maxlength="15">
+          <button type="button" class="promo-check-btn" id="promoCheckBtn">확인</button>
+        </div>
+        <div class="promo-result" id="promoResult" style="display: none;">
+          <span class="promo-icon"></span>
+          <span class="promo-text"></span>
+        </div>
+      </div>
+      <button type="submit" class="auth-btn primary">
+        <span class="btn-text">가입하기</span>
+        <span class="btn-loading" style="display: none;">⏳</span>
+      </button>
+    </form>
+
+    <!-- 비밀번호 재설정 폼 -->
+    <form class="auth-form" id="resetForm">
+      <p class="reset-desc">가입한 이메일을 입력하시면 비밀번호 재설정 링크를 보내드립니다.</p>
+      <div class="form-group">
+        <label for="resetEmail">이메일</label>
+        <input type="email" id="resetEmail" placeholder="이메일을 입력하세요" required>
+      </div>
+      <button type="submit" class="auth-btn primary">
+        <span class="btn-text">재설정 링크 보내기</span>
+        <span class="btn-loading" style="display: none;">⏳</span>
+      </button>
+      <a href="#" class="back-link" id="backToLogin">← 로그인으로 돌아가기</a>
+    </form>
+
+    <!-- 메시지 -->
+    <div class="auth-message" id="authMessage" style="display: none;">
+      <span class="message-icon"></span>
+      <span class="message-text"></span>
+    </div>
+  </div>
+
+  <!-- 로그인 성공 후 표시될 패널 -->
+  <div class="panel-wrapper" id="panelWrapper" style="display: none;">
+    <iframe id="panelIframe" src="../sidepanel/panel.html"></iframe>
+  </div>
+
+  <!-- Firebase SDK (로컬) -->
+  <script src="../lib/firebase-app-compat.js"></script>
+  <script src="../lib/firebase-auth-compat.js"></script>
+  <script src="../lib/firebase-firestore-compat.js"></script>
+  <script src="../lib/env-config.js"></script>
+  <script src="../lib/firebase-config.js"></script>
+  <script src="login.js"></script>
+</body>
+</html>

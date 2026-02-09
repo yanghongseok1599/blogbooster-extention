@@ -1,0 +1,18 @@
+# 환경 설정 (민감 정보)
+lib/env-config.js
+
+# OS 파일
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Node
+node_modules/
+package-lock.json
+
+# 임시 파일
+*.log
+*.tmp
