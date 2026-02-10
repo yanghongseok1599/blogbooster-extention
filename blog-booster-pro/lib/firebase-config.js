@@ -297,21 +297,76 @@ function getErrorMessage(errorCode) {
 async function syncAuthState() {
   const user = getCurrentUser();
   if (user) {
-    let plan = 'free';
+    console.log('[syncAuthState] 시작 - uid:', user.uid, 'email:', user.email);
+
+    // 기존 저장된 플랜을 먼저 읽어서, Firestore 조회 실패 시 보존
+    let existingPlan = 'free';
     try {
-      const userData = await getUserData(user.uid);
-      plan = userData.data?.plan || 'free';
-    } catch (userDataError) {
-      console.warn('[Firebase] 사용자 데이터 조회 실패:', userDataError.message);
+      const existing = await chrome.storage.local.get(['userInfo']);
+      if (existing.userInfo && existing.userInfo.plan) {
+        existingPlan = existing.userInfo.plan;
+      }
+    } catch (e) { /* ignore */ }
+    console.log('[syncAuthState] 기존 플랜:', existingPlan);
+
+    // ID 토큰 가져오기 (최대 2번 시도)
+    let idToken = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        idToken = await user.getIdToken(attempt > 0); // 두 번째 시도에서 force refresh
+        if (idToken) {
+          console.log('[syncAuthState] ID 토큰 획득 (시도 ' + (attempt + 1) + ')');
+          break;
+        }
+      } catch (tokenError) {
+        console.warn('[syncAuthState] ID 토큰 가져오기 실패 (시도 ' + (attempt + 1) + '):', tokenError.message);
+      }
     }
 
-    // ID 토큰 가져와서 저장 (서비스 워커에서 Firebase API 호출용)
-    let idToken = null;
+    // 방법 1: Firebase SDK로 플랜 읽기
+    let plan = existingPlan;
+    let planFetched = false;
     try {
-      idToken = await user.getIdToken(true);
-    } catch (tokenError) {
-      console.error('[Firebase] ID 토큰 가져오기 실패:', tokenError);
+      const userData = await getUserData(user.uid);
+      if (userData.success && userData.data) {
+        plan = userData.data.plan || 'free';
+        planFetched = true;
+        console.log('[syncAuthState] SDK 플랜 확인:', plan);
+      } else {
+        console.warn('[syncAuthState] SDK 유저 데이터 없음:', userData.error);
+      }
+    } catch (e) {
+      console.warn('[syncAuthState] SDK 플랜 조회 실패:', e.message);
     }
+
+    // 방법 2: SDK 실패 시 REST API로 직접 읽기
+    if (!planFetched && idToken) {
+      try {
+        const projectId = firebaseConfig.projectId;
+        const restUrl = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/users/${user.uid}`;
+        const resp = await fetch(restUrl, {
+          headers: { 'Authorization': 'Bearer ' + idToken }
+        });
+        console.log('[syncAuthState] REST API 응답:', resp.status);
+        if (resp.ok) {
+          const doc = await resp.json();
+          if (doc.fields && doc.fields.plan && doc.fields.plan.stringValue) {
+            plan = doc.fields.plan.stringValue;
+            planFetched = true;
+            console.log('[syncAuthState] REST API 플랜 확인:', plan);
+          } else {
+            console.warn('[syncAuthState] REST API 응답에 plan 필드 없음:', JSON.stringify(doc.fields ? Object.keys(doc.fields) : 'no fields'));
+          }
+        } else {
+          const errText = await resp.text().catch(() => '');
+          console.warn('[syncAuthState] REST API 실패: status', resp.status, errText.substring(0, 200));
+        }
+      } catch (e) {
+        console.warn('[syncAuthState] REST API 오류:', e.message);
+      }
+    }
+
+    console.log('[syncAuthState] 최종 플랜:', plan, '(fetched:', planFetched, ', token:', idToken ? '있음' : '없음', ')');
 
     await chrome.storage.local.set({
       isLoggedIn: true,
@@ -325,7 +380,10 @@ async function syncAuthState() {
       firebaseRefreshToken: user.refreshToken || null,
       firebaseTokenTimestamp: Date.now()
     });
+
+    console.log('[syncAuthState] 저장 완료');
   } else {
+    console.log('[syncAuthState] 로그아웃 상태');
     await chrome.storage.local.set({
       isLoggedIn: false,
       userInfo: null,

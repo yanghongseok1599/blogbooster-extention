@@ -1454,15 +1454,27 @@ async function getFirebaseIdToken() {
   try {
     const result = await chrome.storage.local.get(['firebaseIdToken', 'firebaseRefreshToken', 'firebaseTokenTimestamp']);
 
-    // 토큰이 없으면 null
-    if (!result.firebaseIdToken) return null;
+    // 토큰이 없지만 refreshToken이 있으면 갱신 시도
+    if (!result.firebaseIdToken) {
+      if (result.firebaseRefreshToken) {
+        console.log('[Firebase] ID 토큰 없음, refreshToken으로 갱신 시도...');
+        const newToken = await refreshFirebaseTokenWithRestApi(result.firebaseRefreshToken);
+        if (newToken) return newToken;
+      }
+      console.log('[Firebase] 토큰 없음 (refreshToken도 없음)');
+      return null;
+    }
 
     // 토큰 만료 확인 (50분 = 3000000ms, 1시간 만료 전 여유)
     const tokenAge = Date.now() - (result.firebaseTokenTimestamp || 0);
-    if (tokenAge > 3000000 && result.firebaseRefreshToken) {
-      console.log('[Firebase] 토큰 만료됨, 갱신 시도...');
-      const newToken = await refreshFirebaseTokenWithRestApi(result.firebaseRefreshToken);
-      if (newToken) return newToken;
+    if (tokenAge > 3000000) {
+      if (result.firebaseRefreshToken) {
+        console.log('[Firebase] 토큰 만료됨, 갱신 시도...');
+        const newToken = await refreshFirebaseTokenWithRestApi(result.firebaseRefreshToken);
+        if (newToken) return newToken;
+      }
+      // 갱신 실패해도 기존 토큰 반환 (만료됐을 수 있지만, 401 시 재시도 로직에서 처리)
+      console.log('[Firebase] 토큰 갱신 실패, 기존 토큰 반환');
     }
 
     return result.firebaseIdToken;
@@ -1517,20 +1529,29 @@ async function fetchWithTokenRefresh(url, options = {}) {
   options.headers = { ...options.headers, 'Authorization': `Bearer ${token}` };
   let response = await fetch(url, options);
 
-  // 401이면 강제 토큰 갱신 후 재시도
-  if (response.status === 401) {
-    console.log('[Firebase] 401 수신, 토큰 강제 갱신 후 재시도...');
-    const result = await chrome.storage.local.get(['firebaseRefreshToken']);
-    if (result.firebaseRefreshToken) {
-      const newToken = await refreshFirebaseTokenWithRestApi(result.firebaseRefreshToken);
-      if (newToken) {
-        options.headers['Authorization'] = `Bearer ${newToken}`;
-        response = await fetch(url, options);
-      }
+  // 401 또는 403이면 강제 토큰 갱신 후 재시도
+  if (response.status === 401 || response.status === 403) {
+    console.log(`[Firebase] ${response.status} 수신, 토큰 강제 갱신 후 재시도...`);
+    const newToken = await forceRefreshToken();
+    if (newToken) {
+      options.headers['Authorization'] = `Bearer ${newToken}`;
+      response = await fetch(url, options);
     }
   }
 
   return response;
+}
+
+// 토큰 강제 갱신 헬퍼
+async function forceRefreshToken() {
+  try {
+    const result = await chrome.storage.local.get(['firebaseRefreshToken']);
+    if (result.firebaseRefreshToken) {
+      const newToken = await refreshFirebaseTokenWithRestApi(result.firebaseRefreshToken);
+      if (newToken) return newToken;
+    }
+  } catch (e) { /* ignore */ }
+  return null;
 }
 
 // ==================== Firebase API 키 관리 ====================
@@ -1542,7 +1563,8 @@ async function fetchWithTokenRefresh(url, options = {}) {
  */
 async function getGeminiApiKeyFromFirebase() {
   try {
-    const token = await getFirebaseIdToken();
+    let token = await getFirebaseIdToken();
+    console.log('[PlanCheck] 1. 토큰 상태:', token ? '있음' : '없음');
 
     // 1. 사용자 정보 확인
     const userResult = await chrome.storage.local.get(['userInfo', 'isLoggedIn']);
@@ -1550,8 +1572,17 @@ async function getGeminiApiKeyFromFirebase() {
     const userInfo = userResult.userInfo;
 
     if (!isLoggedIn || !userInfo) {
-      console.log('[Firebase] 로그인 필요');
+      console.log('[PlanCheck] 로그인 안됨:', { isLoggedIn, hasUserInfo: !!userInfo });
       return { success: false, error: '로그인이 필요합니다.' };
+    }
+
+    console.log('[PlanCheck] 2. 유저정보:', { uid: userInfo.uid, email: userInfo.email, storedPlan: userInfo.plan });
+
+    // 토큰이 없으면 한 번 더 갱신 시도
+    if (!token) {
+      console.log('[PlanCheck] 토큰 없음 → 강제 갱신 시도');
+      token = await forceRefreshToken();
+      console.log('[PlanCheck] 강제 갱신 결과:', token ? '성공' : '실패');
     }
 
     // 2. API 키 결정 (Firestore settings 또는 기본 키)
@@ -1560,9 +1591,18 @@ async function getGeminiApiKeyFromFirebase() {
 
     try {
       const settingsUrl = `${FIRESTORE_BASE_URL}/settings/apiKeys`;
-      const settingsResponse = await fetch(settingsUrl, {
+      let settingsResponse = await fetch(settingsUrl, {
         headers: token ? { 'Authorization': `Bearer ${token}` } : {}
       });
+
+      // 401/403 시 토큰 갱신 후 재시도
+      if ((settingsResponse.status === 401 || settingsResponse.status === 403)) {
+        console.log('[PlanCheck] settings 조회 실패:', settingsResponse.status, '→ 토큰 갱신');
+        token = await forceRefreshToken();
+        if (token) {
+          settingsResponse = await fetch(settingsUrl, { headers: { 'Authorization': `Bearer ${token}` } });
+        }
+      }
 
       if (settingsResponse.ok) {
         const settingsDoc = await settingsResponse.json();
@@ -1571,103 +1611,129 @@ async function getGeminiApiKeyFromFirebase() {
           apiKey = settings.geminiApiKey;
         }
         freeAccessEnabled = settings?.freeAccessEnabled || false;
+        console.log('[PlanCheck] settings 조회 성공, freeAccess:', freeAccessEnabled);
       }
     } catch (e) {
-      console.log('[Firebase] API 설정 조회 실패, 기본 키 사용');
+      console.log('[PlanCheck] API 설정 조회 실패:', e.message);
     }
 
-    // 3. 접근 권한 확인 - Firestore에서 유저 플랜 직접 확인
-    const userEmail = userInfo.email;
+    // 3. 접근 권한 확인
     const userUid = userInfo.uid;
     let hasActivePlan = false;
+    const storedPlan = userInfo.plan || 'free';
 
-    // 3-1. Firestore users 컬렉션에서 플랜 확인 (이메일 → UID 순서로 시도)
-    const idsToTry = [userEmail, userUid].filter(Boolean);
-    for (const docId of idsToTry) {
-      if (hasActivePlan) break;
-      try {
-        const userDocUrl = `${FIRESTORE_BASE_URL}/users/${encodeURIComponent(docId)}`;
-        const userDocResponse = await fetch(userDocUrl, {
-          headers: token ? { 'Authorization': `Bearer ${token}` } : {}
-        });
+    // 3-1. Firestore에서 최신 플랜 확인 (UID로 조회)
+    if (userUid) {
+      // 토큰이 없으면 마지막으로 한 번 더 시도
+      if (!token) {
+        token = await forceRefreshToken();
+      }
 
-        if (userDocResponse.ok) {
-          const userDoc = await userDocResponse.json();
-          const userData = firestoreDocToJson(userDoc);
-          console.log(`[Firebase] 유저 문서 조회 성공 [docId: ${docId}]`, JSON.stringify(userData));
-          if (userData) {
-            const plan = userData.plan || 'free';
-            // planExpiry는 Firestore Timestamp 또는 Date 문자열일 수 있음
-            let expiresAt = 0;
-            const rawExpiry = userData.planExpiry || userData.planExpiresAt || userData.expiresAt;
-            console.log(`[Firebase] plan=${plan}, rawExpiry=${rawExpiry}, type=${typeof rawExpiry}`);
-            if (rawExpiry) {
-              if (typeof rawExpiry === 'number') expiresAt = rawExpiry;
-              else if (rawExpiry.seconds) expiresAt = rawExpiry.seconds * 1000;
-              else if (typeof rawExpiry === 'string') expiresAt = new Date(rawExpiry).getTime();
-            }
-            const now = Date.now();
-            console.log(`[Firebase] expiresAt=${expiresAt}, now=${now}, diff=${expiresAt - now}`);
+      if (token) {
+        try {
+          const userDocUrl = `${FIRESTORE_BASE_URL}/users/${encodeURIComponent(userUid)}`;
+          console.log('[PlanCheck] 3-1. Firestore 조회 시작:', userDocUrl);
+          let resp = await fetch(userDocUrl, { headers: { 'Authorization': `Bearer ${token}` } });
+          console.log('[PlanCheck] 3-1. 응답 상태:', resp.status);
 
-            if (plan !== 'free') {
-              // 만료일이 없으면 영구 PRO로 간주, 만료일이 있으면 만료 확인
-              if (!expiresAt || expiresAt > now) {
-                hasActivePlan = true;
-                if (expiresAt) {
-                  const daysLeft = Math.ceil((expiresAt - now) / (24 * 60 * 60 * 1000));
-                  console.log(`[Firebase] Firestore 유료 플랜 확인: ${plan} (${daysLeft}일 남음) [docId: ${docId}]`);
-                } else {
-                  console.log(`[Firebase] Firestore 유료 플랜 확인: ${plan} (영구) [docId: ${docId}]`);
-                }
-              } else {
-                console.log(`[Firebase] 플랜 만료됨: expiresAt=${expiresAt} < now=${now}`);
-              }
-            } else {
-              console.log(`[Firebase] 무료 플랜 [docId: ${docId}]`);
+          // 401/403 → 토큰 갱신 후 재시도
+          if (resp.status === 401 || resp.status === 403) {
+            console.log('[PlanCheck] 3-1. 인증 실패 → 토큰 갱신 재시도');
+            token = await forceRefreshToken();
+            if (token) {
+              resp = await fetch(userDocUrl, { headers: { 'Authorization': `Bearer ${token}` } });
+              console.log('[PlanCheck] 3-1. 재시도 응답:', resp.status);
             }
           }
-        } else {
-          console.log(`[Firebase] 유저 문서 없음 [docId: ${docId}] status=${userDocResponse.status}`);
+
+          if (resp.ok) {
+            const rawDoc = await resp.json();
+            const userData = firestoreDocToJson(rawDoc);
+            console.log('[PlanCheck] 3-1. Firestore 유저 데이터:', userData ? { plan: userData.plan, planExpiry: userData.planExpiry } : 'null');
+
+            if (userData) {
+              const plan = userData.plan || 'free';
+              let expiresAt = 0;
+              const rawExpiry = userData.planExpiry || userData.planExpiresAt || userData.expiresAt;
+
+              if (rawExpiry) {
+                if (typeof rawExpiry === 'number') expiresAt = rawExpiry;
+                else if (rawExpiry.seconds) expiresAt = rawExpiry.seconds * 1000;
+                else if (typeof rawExpiry === 'string') expiresAt = new Date(rawExpiry).getTime();
+              }
+
+              // storage 플랜을 Firestore 최신값으로 동기화
+              if (plan !== storedPlan) {
+                console.log('[PlanCheck] 3-1. 플랜 동기화:', storedPlan, '→', plan);
+                try {
+                  const s = await chrome.storage.local.get(['userInfo']);
+                  if (s.userInfo) { s.userInfo.plan = plan; await chrome.storage.local.set({ userInfo: s.userInfo }); }
+                } catch (e) { /* ignore */ }
+              }
+
+              const now = Date.now();
+              if (plan !== 'free' && (!expiresAt || expiresAt > now)) {
+                hasActivePlan = true;
+                console.log(`[PlanCheck] 3-1. ✅ 유료 플랜 확인: ${plan}, 만료: ${expiresAt ? new Date(expiresAt).toISOString() : '없음'}`);
+              } else if (plan !== 'free' && expiresAt && expiresAt <= now) {
+                // 만료 → storage도 free로
+                try {
+                  const s = await chrome.storage.local.get(['userInfo']);
+                  if (s.userInfo) { s.userInfo.plan = 'free'; await chrome.storage.local.set({ userInfo: s.userInfo }); }
+                } catch (e) { /* ignore */ }
+                console.log('[PlanCheck] 3-1. ❌ 플랜 만료:', new Date(expiresAt).toISOString());
+              } else {
+                console.log('[PlanCheck] 3-1. 무료 플랜:', plan);
+              }
+            }
+          } else {
+            console.log('[PlanCheck] 3-1. Firestore 조회 실패 (status:', resp.status, ')');
+          }
+        } catch (e) {
+          console.log('[PlanCheck] 3-1. Firestore 조회 오류:', e.message);
         }
-      } catch (e) {
-        console.log(`[Firebase] Firestore 유저 문서 조회 실패 [docId: ${docId}]`);
+      } else {
+        console.log('[PlanCheck] 3-1. 건너뜀 (토큰 없음)');
       }
     }
 
-    // 3-2. 로컬 userPlans 폴백 (프로모 코드로 활성화한 경우)
+    // 3-2. Firestore 조회 실패/불가 시 → storage에 저장된 플랜으로 판단
+    if (!hasActivePlan && storedPlan !== 'free') {
+      hasActivePlan = true;
+      console.log(`[PlanCheck] 3-2. ✅ 저장된 플랜으로 접근 허용: ${storedPlan}`);
+    }
+
+    // 3-3. 로컬 userPlans 폴백 (프로모 코드)
     if (!hasActivePlan) {
       const plansResult = await chrome.storage.local.get(['userPlans']);
       const userPlans = plansResult.userPlans || {};
-      const planData = userPlans[userUid] || userPlans[userEmail];
+      const planData = userPlans[userUid] || userPlans[userInfo.email];
       const now = Date.now();
       if (planData && planData.expiresAt > now) {
         hasActivePlan = true;
-        const daysLeft = Math.ceil((planData.expiresAt - now) / (24 * 60 * 60 * 1000));
-        console.log(`[Firebase] 로컬 유료 플랜 확인 (${daysLeft}일 남음)`);
+        console.log('[PlanCheck] 3-3. ✅ 로컬 플랜으로 접근 허용');
       }
     }
 
-    // 유료 플랜이 활성 상태이거나 무료 접근이 허용된 경우
     if (hasActivePlan || freeAccessEnabled) {
-      console.log('[Firebase] API 키 접근 허용:', hasActivePlan ? '유료 플랜' : '무료 접근 허용됨');
+      console.log('[PlanCheck] ✅ 최종: 접근 허용 (hasActivePlan:', hasActivePlan, ', freeAccess:', freeAccessEnabled, ')');
       return { success: true, apiKey };
     }
 
-    // 유료 플랜이 만료되었거나 없는 경우
-    return {
-      success: false,
-      error: 'PRO 구독이 필요한 기능입니다.',
-      requireSubscription: true
-    };
+    console.log('[PlanCheck] ❌ 최종: PRO 구독 필요 (storedPlan:', storedPlan, ', token:', token ? '있음' : '없음', ')');
+    return { success: false, error: 'PRO 구독이 필요한 기능입니다.', requireSubscription: true };
 
   } catch (error) {
-    console.error('[Firebase] API 키 가져오기 오류:', error);
+    console.error('[PlanCheck] 오류:', error);
 
-    // 오류 시 로컬 스토리지 폴백
-    const localResult = await chrome.storage.local.get(['serverGeminiApiKey']);
-    if (localResult.serverGeminiApiKey) {
-      return { success: true, apiKey: localResult.serverGeminiApiKey };
-    }
+    // 최후 방어: 오류 발생해도 storage에 유료 플랜이면 허용
+    try {
+      const fb = await chrome.storage.local.get(['userInfo']);
+      if (fb.userInfo && fb.userInfo.plan && fb.userInfo.plan !== 'free') {
+        console.log('[PlanCheck] 오류 폴백: 저장된 유료 플랜으로 허용:', fb.userInfo.plan);
+        return { success: true, apiKey: DEFAULT_GEMINI_API_KEY };
+      }
+    } catch (e) { /* ignore */ }
 
     return { success: false, error: error.message };
   }
@@ -1684,18 +1750,12 @@ async function getAvailableGeminiApiKey() {
     return firebaseResult.apiKey;
   }
 
-  // 2. 구독 필요 에러인 경우 null 반환 (에러 전파)
+  // 2. 구독 필요 에러인 경우 null 반환 (PRO 전용)
   if (firebaseResult.requireSubscription) {
     return null;
   }
 
-  // 3. 개인 API 키 폴백 (사용자가 직접 설정한 경우)
-  const syncResult = await chrome.storage.sync.get(['geminiApiKey']);
-  if (syncResult.geminiApiKey) {
-    return syncResult.geminiApiKey;
-  }
-
-  // 4. 기본 API 키 폴백
+  // 3. 기본 API 키 폴백
   return DEFAULT_GEMINI_API_KEY;
 }
 
