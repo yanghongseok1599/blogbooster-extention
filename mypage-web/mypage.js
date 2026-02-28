@@ -114,10 +114,8 @@ document.addEventListener('DOMContentLoaded', function() {
     profileEmail.textContent = currentUser.email || '';
 
     var plan = data.plan || 'free';
-    var planText = plan === 'free' ? '무료 플랜' :
-                   plan === 'pro' ? 'PRO 플랜' :
-                   plan === 'unlimited' ? '무제한 플랜' :
-                   plan === 'premium' ? 'Premium 플랜' : '무료 플랜';
+    var planText = plan === 'pro' ? 'PRO 플랜' :
+                   plan === 'unlimited' ? 'Unlimited 플랜' : '일반 플랜';
     profilePlan.textContent = planText;
     profilePlan.className = 'plan-badge ' + plan;
 

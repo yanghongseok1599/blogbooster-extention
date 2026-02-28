@@ -13,6 +13,50 @@ const ADMIN_EMAIL = ENV_CONFIG.adminEmail;
 const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-001:generateContent';
 const DEFAULT_GEMINI_API_KEY = 'AIzaSyBTkLbVrVB6ucdiGiQNuGeWbqOsFHBecp4';
 
+// Gemini API 재시도 헬퍼 (429 Rate Limit, 503 Service Unavailable 대응)
+async function callGeminiWithRetry(apiKey, requestBody, maxRetries = 2) {
+  let lastError = null;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await fetch(`${GEMINI_ENDPOINT}?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody)
+      });
+
+      // 429 또는 503이면 재시도
+      if ((response.status === 429 || response.status === 503) && attempt < maxRetries) {
+        const waitTime = (attempt + 1) * 3000; // 3초, 6초
+        console.log(`[Gemini] ${response.status} 수신, ${waitTime/1000}초 후 재시도 (${attempt + 1}/${maxRetries})`);
+        await new Promise(r => setTimeout(r, waitTime));
+        continue;
+      }
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(`API 오류: ${response.status} - ${errorData.error?.message || '알 수 없는 오류'}`);
+      }
+
+      const data = await response.json();
+      if (!data.candidates || data.candidates.length === 0) {
+        throw new Error('응답 생성에 실패했습니다. 다시 시도해주세요.');
+      }
+
+      return data.candidates[0].content.parts[0].text;
+    } catch (error) {
+      lastError = error;
+      if (attempt < maxRetries && (error.message.includes('Failed to fetch') || error.message.includes('network'))) {
+        const waitTime = (attempt + 1) * 2000;
+        console.log(`[Gemini] 네트워크 오류, ${waitTime/1000}초 후 재시도 (${attempt + 1}/${maxRetries})`);
+        await new Promise(r => setTimeout(r, waitTime));
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw lastError;
+}
+
 // YouTube API 설정
 const YOUTUBE_API_BASE = 'https://www.googleapis.com/youtube/v3';
 const YOUTUBE_DAILY_LIMIT = 3; // 1인당 일일 변환 제한
@@ -309,36 +353,17 @@ async function handleGenerateContent(request, sendResponse) {
       sendResponse({ success: false, error: 'API 키가 설정되지 않았습니다.' });
       return;
     }
-    const response = await fetch(`${GEMINI_ENDPOINT}?key=${key}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        contents: [{
-          parts: [{ text: request.prompt }]
-        }],
-        generationConfig: {
-          temperature: request.temperature || 0.7,
-          maxOutputTokens: request.maxTokens || 4096,
-          topP: 0.8,
-          topK: 40
-        }
-      })
+
+    const generatedText = await callGeminiWithRetry(key, {
+      contents: [{ parts: [{ text: request.prompt }] }],
+      generationConfig: {
+        temperature: request.temperature || 0.7,
+        maxOutputTokens: request.maxTokens || 4096,
+        topP: 0.8,
+        topK: 40
+      }
     });
 
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(`API 오류: ${response.status} - ${errorData.error?.message || '알 수 없는 오류'}`);
-    }
-
-    const data = await response.json();
-
-    if (!data.candidates || data.candidates.length === 0) {
-      throw new Error('응답 생성에 실패했습니다.');
-    }
-
-    const generatedText = data.candidates[0].content.parts[0].text;
     sendResponse({ success: true, data: generatedText });
   } catch (error) {
     console.error('[Service Worker] AI 생성 오류:', error);
@@ -684,29 +709,18 @@ async function generateBlogFromDescription(videoInfo, apiKey) {
   // Firebase에서 API 키 가져오기
   const geminiKey = await getAvailableGeminiApiKey();
   if (!geminiKey) {
-    throw new Error('Gemini API 키가 설정되지 않았습니다. PRO 구독이 필요할 수 있습니다.');
+    throw new Error('PRO 구독이 필요하거나, 마이페이지에서 개인 Gemini API 키를 입력해주세요.');
   }
 
-  const response = await fetch(`${GEMINI_ENDPOINT}?key=${geminiKey}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: {
-        temperature: 0.7,
-        maxOutputTokens: 8192,
-        topP: 0.8,
-        topK: 40
-      }
-    })
+  return await callGeminiWithRetry(geminiKey, {
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: {
+      temperature: 0.7,
+      maxOutputTokens: 8192,
+      topP: 0.8,
+      topK: 40
+    }
   });
-
-  if (!response.ok) {
-    throw new Error('블로그 생성 실패');
-  }
-
-  const data = await response.json();
-  return data.candidates[0].content.parts[0].text;
 }
 
 // YouTube 자막 크롤링 (비공식 방법 - API 할당량 절약)
@@ -787,29 +801,18 @@ ${transcript.substring(0, 15000)} ${transcript.length > 15000 ? '... (생략됨)
   // Firebase에서 API 키 가져오기
   const geminiKey = await getAvailableGeminiApiKey();
   if (!geminiKey) {
-    throw new Error('Gemini API 키가 설정되지 않았습니다. PRO 구독이 필요할 수 있습니다.');
+    throw new Error('PRO 구독이 필요하거나, 마이페이지에서 개인 Gemini API 키를 입력해주세요.');
   }
 
-  const response = await fetch(`${GEMINI_ENDPOINT}?key=${geminiKey}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: {
-        temperature: 0.7,
-        maxOutputTokens: 8192,
-        topP: 0.8,
-        topK: 40
-      }
-    })
+  return await callGeminiWithRetry(geminiKey, {
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: {
+      temperature: 0.7,
+      maxOutputTokens: 8192,
+      topP: 0.8,
+      topK: 40
+    }
   });
-
-  if (!response.ok) {
-    throw new Error('블로그 생성 실패');
-  }
-
-  const data = await response.json();
-  return data.candidates[0].content.parts[0].text;
 }
 
 // YouTube → 블로그 변환 메인 핸들러
@@ -1081,29 +1084,18 @@ ${customPrompt}`;
   // Firebase에서 API 키 가져오기
   const geminiKey = await getAvailableGeminiApiKey();
   if (!geminiKey) {
-    throw new Error('Gemini API 키가 설정되지 않았습니다. PRO 구독이 필요할 수 있습니다.');
+    throw new Error('PRO 구독이 필요하거나, 마이페이지에서 개인 Gemini API 키를 입력해주세요.');
   }
 
-  const response = await fetch(`${GEMINI_ENDPOINT}?key=${geminiKey}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: {
-        temperature: 0.7,
-        maxOutputTokens: 8192,
-        topP: 0.8,
-        topK: 40
-      }
-    })
+  return await callGeminiWithRetry(geminiKey, {
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: {
+      temperature: 0.7,
+      maxOutputTokens: 8192,
+      topP: 0.8,
+      topK: 40
+    }
   });
-
-  if (!response.ok) {
-    throw new Error('블로그 생성 실패');
-  }
-
-  const data = await response.json();
-  return data.candidates[0].content.parts[0].text;
 }
 
 // 동영상 설명으로 블로그 생성 (사용자 추가 요청 포함)
@@ -1140,29 +1132,18 @@ ${customPrompt}`;
   // Firebase에서 API 키 가져오기
   const geminiKey = await getAvailableGeminiApiKey();
   if (!geminiKey) {
-    throw new Error('Gemini API 키가 설정되지 않았습니다. PRO 구독이 필요할 수 있습니다.');
+    throw new Error('PRO 구독이 필요하거나, 마이페이지에서 개인 Gemini API 키를 입력해주세요.');
   }
 
-  const response = await fetch(`${GEMINI_ENDPOINT}?key=${geminiKey}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: {
-        temperature: 0.7,
-        maxOutputTokens: 8192,
-        topP: 0.8,
-        topK: 40
-      }
-    })
+  return await callGeminiWithRetry(geminiKey, {
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: {
+      temperature: 0.7,
+      maxOutputTokens: 8192,
+      topP: 0.8,
+      topK: 40
+    }
   });
-
-  if (!response.ok) {
-    throw new Error('블로그 생성 실패');
-  }
-
-  const data = await response.json();
-  return data.candidates[0].content.parts[0].text;
 }
 
 // YouTube API 키 설정 핸들러 (관리자용 - Firebase에 저장)
@@ -1721,7 +1702,7 @@ async function getGeminiApiKeyFromFirebase() {
     }
 
     console.log('[PlanCheck] ❌ 최종: PRO 구독 필요 (storedPlan:', storedPlan, ', token:', token ? '있음' : '없음', ')');
-    return { success: false, error: 'PRO 구독이 필요한 기능입니다.', requireSubscription: true };
+    return { success: false, error: 'PRO 구독이 필요하거나, 마이페이지에서 개인 Gemini API 키를 입력해주세요.', requireSubscription: true };
 
   } catch (error) {
     console.error('[PlanCheck] 오류:', error);
@@ -1744,18 +1725,27 @@ async function getGeminiApiKeyFromFirebase() {
  * Firebase 우선, 실패 시 로컬 폴백
  */
 async function getAvailableGeminiApiKey() {
-  // 1. Firebase에서 가져오기 시도
+  // 1. 개인 API 키 먼저 확인 (일반 유저도 사용 가능)
+  try {
+    const personalResult = await chrome.storage.sync.get(['geminiApiKey']);
+    if (personalResult.geminiApiKey) {
+      console.log('[API] 개인 API 키 사용');
+      return personalResult.geminiApiKey;
+    }
+  } catch (e) { /* ignore */ }
+
+  // 2. Firebase 서버 API 키 (PRO 구독 체크)
   const firebaseResult = await getGeminiApiKeyFromFirebase();
   if (firebaseResult.success) {
     return firebaseResult.apiKey;
   }
 
-  // 2. 구독 필요 에러인 경우 null 반환 (PRO 전용)
+  // 3. PRO 아니고 개인 키도 없음
   if (firebaseResult.requireSubscription) {
     return null;
   }
 
-  // 3. 기본 API 키 폴백
+  // 4. 기본 API 키 폴백
   return DEFAULT_GEMINI_API_KEY;
 }
 

@@ -173,7 +173,7 @@ document.addEventListener('DOMContentLoaded', function() {
       let planBadge;
       if (user.plan === 'unlimited') planBadge = '<span class="plan-badge pro">무제한</span>';
       else if (user.plan === 'pro') planBadge = '<span class="plan-badge pro">PRO</span>';
-      else planBadge = '<span class="plan-badge free">무료</span>';
+      else planBadge = '<span class="plan-badge free">일반</span>';
 
       const expiry = getExpiryInfo(user.planExpiry, user.plan);
       const created = formatTimestamp(user.createdAt);
@@ -401,7 +401,7 @@ document.addEventListener('DOMContentLoaded', function() {
     document.getElementById('editUserEmail').textContent = user.email;
     document.getElementById('editUserNickname').textContent = user.nickname || user.displayName || '-';
 
-    let planText = '무료';
+    let planText = '일반';
     if (user.plan === 'pro') planText = '프로 (Pro)';
     else if (user.plan === 'unlimited') planText = '무제한 (Unlimited)';
     document.getElementById('editCurrentPlan').textContent = planText;

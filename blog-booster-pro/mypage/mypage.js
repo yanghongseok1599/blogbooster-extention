@@ -132,9 +132,8 @@ document.addEventListener('DOMContentLoaded', async function() {
 
     // 플랜 정보
     var plan = user.plan || data.plan || 'free';
-    var planText = plan === 'free' ? '무료 플랜' :
-                   plan === 'pro' ? 'PRO 플랜' :
-                   plan === 'premium' ? 'Premium 플랜' : '무료 플랜';
+    var planText = plan === 'pro' ? 'PRO 플랜' :
+                   plan === 'unlimited' ? 'Unlimited 플랜' : '일반 플랜';
     profilePlan.textContent = planText;
     profilePlan.className = 'plan-badge ' + plan;
 

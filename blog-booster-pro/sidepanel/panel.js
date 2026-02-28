@@ -146,9 +146,8 @@ document.addEventListener('DOMContentLoaded', function() {
       var planBadge = userPlan.querySelector('.plan-badge');
       if (planBadge) {
         planBadge.className = 'plan-badge ' + plan;
-        planBadge.textContent = plan === 'free' ? '무료 플랜' :
-                               plan === 'pro' ? 'Pro 플랜' :
-                               plan === 'premium' ? 'Premium 플랜' : '무료 플랜';
+        planBadge.textContent = plan === 'pro' ? 'PRO 플랜' :
+                               plan === 'unlimited' ? 'Unlimited 플랜' : '일반 플랜';
       }
     }
 
