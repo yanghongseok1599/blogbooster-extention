@@ -97,11 +97,30 @@ async function signIn(email, password) {
     const userCredential = await firebaseAuth.signInWithEmailAndPassword(email, password);
     const user = userCredential.user;
 
-    // 마지막 로그인 시간 업데이트 (실패해도 로그인 자체는 성공으로 처리)
+    // Firestore 문서 확인 및 업데이트
     try {
-      await firebaseDb.collection('users').doc(user.uid).update({
-        lastLoginAt: firebase.firestore.FieldValue.serverTimestamp()
-      });
+      const userDoc = await firebaseDb.collection('users').doc(user.uid).get();
+      if (userDoc.exists) {
+        // 기존 문서 → 로그인 시간만 업데이트
+        await firebaseDb.collection('users').doc(user.uid).update({
+          lastLoginAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+      } else {
+        // 문서 없음 → 회원가입 때 Firestore 저장이 실패한 경우 → 자동 생성
+        console.log('[Firebase] 유저 문서 없음, 자동 생성:', user.uid);
+        await firebaseDb.collection('users').doc(user.uid).set({
+          email: user.email,
+          name: user.displayName || user.email.split('@')[0],
+          nickname: user.displayName || user.email.split('@')[0],
+          displayName: user.displayName || user.email.split('@')[0],
+          plan: 'free',
+          planExpiry: null,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+          lastLoginAt: firebase.firestore.FieldValue.serverTimestamp(),
+          usageCount: 0,
+          isActive: true
+        });
+      }
     } catch (firestoreError) {
       console.warn('[Firebase] Firestore 업데이트 실패 (로그인은 성공):', firestoreError.message);
     }

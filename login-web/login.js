@@ -95,12 +95,29 @@ document.addEventListener('DOMContentLoaded', function() {
 
     try {
       const userCredential = await auth.signInWithEmailAndPassword(email, password);
-      // lastLoginAt 업데이트
+      const user = userCredential.user;
+      // Firestore 문서 확인 및 업데이트
       try {
-        await db.collection('users').doc(userCredential.user.uid).update({
-          lastLoginAt: firebase.firestore.FieldValue.serverTimestamp()
-        });
-      } catch (e) { /* ignore */ }
+        const userDoc = await db.collection('users').doc(user.uid).get();
+        if (userDoc.exists) {
+          await db.collection('users').doc(user.uid).update({
+            lastLoginAt: firebase.firestore.FieldValue.serverTimestamp()
+          });
+        } else {
+          // 회원가입 시 Firestore 저장 실패한 경우 → 자동 생성
+          await db.collection('users').doc(user.uid).set({
+            email: user.email,
+            name: user.displayName || user.email.split('@')[0],
+            nickname: user.displayName || user.email.split('@')[0],
+            displayName: user.displayName || user.email.split('@')[0],
+            plan: 'free',
+            planExpiry: null,
+            createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+            lastLoginAt: firebase.firestore.FieldValue.serverTimestamp(),
+            usageCount: 0
+          });
+        }
+      } catch (e) { console.warn('Firestore 업데이트 실패:', e.message); }
       window.location.href = MYPAGE_URL;
     } catch (error) {
       showMessage('error', getAuthError(error.code));
