@@ -84,8 +84,10 @@ document.addEventListener('DOMContentLoaded', function() {
   // 설정
   const newAdminPassword = document.getElementById('newAdminPassword');
   const changePasswordBtn = document.getElementById('changePasswordBtn');
-  const serverApiKey = document.getElementById('serverApiKey');
-  const saveServerApiBtn = document.getElementById('saveServerApiBtn');
+  const geminiApiKeysInput = document.getElementById('geminiApiKeysInput');
+  const saveGeminiApiKeysBtn = document.getElementById('saveGeminiApiKeysBtn');
+  const dailyLimitInput = document.getElementById('dailyLimitInput');
+  const saveDailyLimitBtn = document.getElementById('saveDailyLimitBtn');
 
   let currentCodes = [];
   let allPromoCodes = [];
@@ -273,15 +275,21 @@ document.addEventListener('DOMContentLoaded', function() {
           freeAccessCheckbox.checked = response.settings.freeAccessEnabled || false;
         }
 
+        // Gemini API 키 다중 로드
+        if (geminiApiKeysInput && response.settings.geminiApiKeys && response.settings.geminiApiKeys.length > 0) {
+          geminiApiKeysInput.value = response.settings.geminiApiKeys.join('\n');
+          console.log('[Admin] Gemini API 키 로드됨:', response.settings.geminiApiKeys.length, '개');
+        }
+
+        // 일일 사용 제한 로드
+        if (dailyLimitInput) {
+          dailyLimitInput.value = response.settings.dailyLimit || 10;
+        }
+
         // YouTube API 키 로드
         if (youtubeApiKeysTextarea && response.settings.youtubeApiKeys) {
           youtubeApiKeysTextarea.value = response.settings.youtubeApiKeys.join('\n');
           console.log('[Admin] YouTube API 키 로드됨:', response.settings.youtubeApiKeys.length, '개');
-        }
-
-        // API 키 상태 표시
-        if (response.settings.hasApiKey) {
-          console.log('[Admin] Firebase에 Gemini API 키 설정됨');
         }
       }
     } catch (error) {
@@ -463,49 +471,86 @@ document.addEventListener('DOMContentLoaded', function() {
   }
 
   /**
-   * 서버 API 키 저장 (Firebase + 로컬 백업)
+   * Gemini API 키 다중 저장 (Firebase + 로컬 백업)
    */
-  async function saveServerApiKey() {
-    const apiKey = serverApiKey.value.trim();
-    if (!apiKey) {
+  async function saveGeminiApiKeys() {
+    const keysInput = document.getElementById('geminiApiKeysInput');
+    const rawText = keysInput ? keysInput.value.trim() : '';
+    if (!rawText) {
       alert('API 키를 입력하세요.');
       return;
     }
 
-    saveServerApiBtn.disabled = true;
-    saveServerApiBtn.textContent = '저장 중...';
+    const keys = rawText.split('\n').map(k => k.trim()).filter(k => k);
+    if (keys.length === 0) {
+      alert('유효한 API 키가 없습니다.');
+      return;
+    }
+
+    const saveBtn = document.getElementById('saveGeminiApiKeysBtn');
+    saveBtn.disabled = true;
+    saveBtn.textContent = '저장 중...';
 
     try {
-      // 무료 사용자 접근 여부 체크박스 (선택사항)
       const freeAccessCheckbox = document.getElementById('freeAccessEnabled');
       const freeAccessEnabled = freeAccessCheckbox ? freeAccessCheckbox.checked : false;
 
-      // Firebase에 저장 시도
+      // Firebase에 저장 (첫 번째 키는 기존 호환용 geminiApiKey, 전체는 geminiApiKeys 배열)
       const response = await new Promise((resolve) => {
         chrome.runtime.sendMessage({
           action: 'saveGeminiApiKeyToFirebase',
-          apiKey: apiKey,
-          options: { freeAccessEnabled }
+          apiKey: keys[0],
+          options: { freeAccessEnabled, geminiApiKeys: keys }
         }, resolve);
       });
 
       if (response && response.success) {
-        // 로컬 백업도 저장 (폴백용)
-        await chrome.storage.local.set({ serverGeminiApiKey: apiKey });
-        alert('서버 API 키가 Firebase에 저장되었습니다.');
+        await chrome.storage.local.set({ geminiApiKeys: keys, serverGeminiApiKey: keys[0] });
+        alert(`Gemini API 키 ${keys.length}개가 저장되었습니다.`);
       } else {
-        // Firebase 실패 시 로컬에만 저장
-        await chrome.storage.local.set({ serverGeminiApiKey: apiKey });
+        await chrome.storage.local.set({ geminiApiKeys: keys, serverGeminiApiKey: keys[0] });
         alert('Firebase 저장 실패. 로컬에만 저장되었습니다.\n(' + (response?.error || '알 수 없는 오류') + ')');
       }
     } catch (error) {
       console.error('API 키 저장 오류:', error);
-      // 오류 시에도 로컬에 저장
-      await chrome.storage.local.set({ serverGeminiApiKey: apiKey });
+      await chrome.storage.local.set({ geminiApiKeys: keys, serverGeminiApiKey: keys[0] });
       alert('Firebase 연결 실패. 로컬에만 저장되었습니다.');
     } finally {
-      saveServerApiBtn.disabled = false;
-      saveServerApiBtn.textContent = '저장';
+      saveBtn.disabled = false;
+      saveBtn.textContent = '저장';
+    }
+  }
+
+  /**
+   * 일일 사용 제한 저장
+   */
+  async function saveDailyLimit() {
+    const limitInput = document.getElementById('dailyLimitInput');
+    const limit = parseInt(limitInput.value) || 10;
+
+    const saveBtn = document.getElementById('saveDailyLimitBtn');
+    saveBtn.disabled = true;
+    saveBtn.textContent = '저장 중...';
+
+    try {
+      const response = await new Promise((resolve) => {
+        chrome.runtime.sendMessage({
+          action: 'saveGeminiApiKeyToFirebase',
+          apiKey: null,
+          options: { dailyLimit: limit }
+        }, resolve);
+      });
+
+      if (response && response.success) {
+        alert(`일일 사용 제한이 ${limit}회로 설정되었습니다.`);
+      } else {
+        alert('저장 실패: ' + (response?.error || '알 수 없는 오류'));
+      }
+    } catch (error) {
+      alert('저장 중 오류 발생');
+    } finally {
+      saveBtn.disabled = false;
+      saveBtn.textContent = '저장';
     }
   }
 
@@ -534,6 +579,87 @@ document.addEventListener('DOMContentLoaded', function() {
   const saveUserPlan = document.getElementById('saveUserPlan');
 
   let allUsersList = []; // 유저 목록 저장
+
+  // 누락 유저 추가 폼 토글
+  const toggleAddUserBtn = document.getElementById('toggleAddUserBtn');
+  const addUserForm = document.getElementById('addUserForm');
+  const addUserBtn = document.getElementById('addUserBtn');
+
+  if (toggleAddUserBtn) {
+    toggleAddUserBtn.addEventListener('click', function() {
+      addUserForm.style.display = addUserForm.style.display === 'none' ? 'block' : 'none';
+    });
+  }
+
+  if (addUserBtn) {
+    addUserBtn.addEventListener('click', async function() {
+      const uid = document.getElementById('addUserUid').value.trim();
+      const email = document.getElementById('addUserEmail').value.trim();
+      const nickname = document.getElementById('addUserNickname').value.trim();
+      const plan = document.getElementById('addUserPlan').value;
+
+      if (!uid || !email) {
+        alert('UID와 이메일은 필수입니다.');
+        return;
+      }
+
+      addUserBtn.disabled = true;
+      addUserBtn.textContent = '추가 중...';
+
+      try {
+        // Firestore에 직접 유저 문서 생성
+        const docRef = firebase.firestore().collection('users').doc(uid);
+        const existing = await docRef.get();
+
+        if (existing.exists) {
+          alert('이미 Firestore에 존재하는 유저입니다.');
+          return;
+        }
+
+        const now = new Date();
+        const userData = {
+          email: email,
+          name: nickname || email.split('@')[0],
+          nickname: nickname || email.split('@')[0],
+          displayName: nickname || email.split('@')[0],
+          plan: plan,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+          lastLoginAt: firebase.firestore.FieldValue.serverTimestamp(),
+          usageCount: 0,
+          isActive: true
+        };
+
+        // PRO/무제한이면 만료일 설정 (3개월 후)
+        if (plan !== 'free') {
+          const expiry = new Date();
+          expiry.setMonth(expiry.getMonth() + 3);
+          userData.planExpiry = expiry;
+        } else {
+          userData.planExpiry = null;
+        }
+
+        await docRef.set(userData);
+        alert('유저가 추가되었습니다: ' + email);
+
+        // 폼 초기화
+        document.getElementById('addUserUid').value = '';
+        document.getElementById('addUserEmail').value = '';
+        document.getElementById('addUserNickname').value = '';
+        document.getElementById('addUserPlan').value = 'free';
+        addUserForm.style.display = 'none';
+
+        // 목록 새로고침
+        loadUsersList();
+
+      } catch (error) {
+        console.error('유저 추가 오류:', error);
+        alert('유저 추가 실패: ' + error.message);
+      } finally {
+        addUserBtn.disabled = false;
+        addUserBtn.textContent = '추가';
+      }
+    });
+  }
 
   /**
    * 가입 유저 목록 로드
@@ -1224,7 +1350,16 @@ document.addEventListener('DOMContentLoaded', function() {
 
   cleanExpiredBtn.addEventListener('click', cleanExpiredCodes);
   changePasswordBtn.addEventListener('click', changePassword);
-  saveServerApiBtn.addEventListener('click', saveServerApiKey);
+
+  // Gemini API 키 다중 저장 버튼
+  if (saveGeminiApiKeysBtn) {
+    saveGeminiApiKeysBtn.addEventListener('click', saveGeminiApiKeys);
+  }
+
+  // 일일 사용 제한 저장 버튼
+  if (saveDailyLimitBtn) {
+    saveDailyLimitBtn.addEventListener('click', saveDailyLimit);
+  }
 
   // YouTube API 키 저장 버튼
   const saveYouTubeApiBtn = document.getElementById('saveYouTubeApiBtn');

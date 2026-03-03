@@ -1838,206 +1838,25 @@
   }
 
   /**
-   * SEO 분석 패널 토글
+   * SEO 분석 패널 토글 (에디터 사이드바 토글)
    */
   function toggleSeoPanel() {
-    const existingPanel = document.getElementById('bb-seo-panel');
-    if (existingPanel) {
-      existingPanel.remove();
-      return;
-    }
-    createSeoPanelOverlay();
-  }
-
-  /**
-   * SEO 분석 패널 오버레이 생성
-   */
-  function createSeoPanelOverlay() {
-    // 기존 패널이 있으면 제거
-    const existing = document.getElementById('bb-seo-panel');
-    if (existing) existing.remove();
-
-    const panel = document.createElement('div');
-    panel.id = 'bb-seo-panel';
-    panel.innerHTML = `
-      <div class="bb-seo-panel-header">
-        <span class="bb-seo-panel-title">📊 SEO 분석</span>
-        <button class="bb-seo-panel-close" id="bbSeoPanelClose">✕</button>
-      </div>
-      <div class="bb-seo-panel-content" id="bbSeoPanelContent">
-        <div class="bb-seo-loading">분석 중...</div>
-      </div>
-    `;
-    document.body.appendChild(panel);
-
-    // 닫기 버튼 이벤트
-    document.getElementById('bbSeoPanelClose').addEventListener('click', () => {
-      panel.remove();
-    });
-
-    // 애니메이션을 위해 약간의 딜레이 후 활성화
-    setTimeout(() => panel.classList.add('active'), 10);
-
-    // SEO 분석 실행
-    runSeoAnalysisForPanel();
-  }
-
-  /**
-   * SEO 분석 실행하여 패널에 표시
-   */
-  async function runSeoAnalysisForPanel() {
-    const contentEl = document.getElementById('bbSeoPanelContent');
-    if (!contentEl) return;
-
-    try {
-      // 페이지 콘텐츠 추출 (BlogExtractor 사용)
-      const pageData = window.BlogExtractor ? window.BlogExtractor.extract() : null;
-
-      if (!pageData || !pageData.fullText) {
-        contentEl.innerHTML = '<div class="bb-seo-error">블로그 글을 찾을 수 없습니다.<br><small>블로그 글 페이지에서 사용해주세요.</small></div>';
-        return;
+    // 에디터 사이드바가 있으면 토글
+    if (analysisSidebar && document.body.contains(analysisSidebar)) {
+      if (analysisSidebar.classList.contains('bb-hidden')) {
+        analysisSidebar.classList.remove('bb-hidden');
+        startSidebarUpdate();
+      } else {
+        analysisSidebar.classList.add('bb-hidden');
+        if (sidebarUpdateInterval) {
+          clearInterval(sidebarUpdateInterval);
+          sidebarUpdateInterval = null;
+        }
       }
-
-      // SEO 분석용 데이터 변환
-      const seoData = {
-        title: pageData.title,
-        content: pageData.fullText,
-        paragraphs: pageData.paragraphs,
-        images: pageData.images,
-        tags: pageData.tags,
-        subheadings: pageData.subheadings,
-        charCount: pageData.stats?.charCount || pageData.fullText.length,
-        paragraphCount: pageData.stats?.paragraphCount || pageData.paragraphs?.length || 0,
-        imageCount: pageData.stats?.imageCount || pageData.images?.length || 0
-      };
-
-      // SEO 분석 (naver-seo-analyzer 사용)
-      const seoResult = typeof analyzeNaverSEO === 'function'
-        ? analyzeNaverSEO(seoData)
-        : calculateBasicSeoScore(seoData);
-
-      // 키워드 추출
-      const keywords = typeof extractKeywords === 'function'
-        ? extractKeywords(pageData.fullText).slice(0, 10)
-        : [];
-
-      // 결과 표시
-      contentEl.innerHTML = `
-        <div class="bb-seo-score-section">
-          <div class="bb-seo-score-circle ${getSeoScoreClass(seoResult.score)}">
-            <span class="bb-seo-score-value">${seoResult.score}</span>
-          </div>
-          <div class="bb-seo-score-label">SEO 점수</div>
-        </div>
-
-        <div class="bb-seo-stats">
-          <div class="bb-seo-stat">
-            <span class="bb-seo-stat-label">글자수</span>
-            <span class="bb-seo-stat-value">${seoData.charCount.toLocaleString()}자</span>
-          </div>
-          <div class="bb-seo-stat">
-            <span class="bb-seo-stat-label">문단</span>
-            <span class="bb-seo-stat-value">${seoData.paragraphCount}개</span>
-          </div>
-          <div class="bb-seo-stat">
-            <span class="bb-seo-stat-label">이미지</span>
-            <span class="bb-seo-stat-value">${seoData.imageCount}장</span>
-          </div>
-        </div>
-
-        <div class="bb-seo-factors">
-          <div class="bb-seo-factors-title">상세 항목</div>
-          ${(seoResult.factors || []).map(factor => `
-            <div class="bb-seo-factor ${factor.pass ? 'pass' : 'fail'}">
-              <span class="bb-seo-factor-icon">${factor.pass ? '✅' : '❌'}</span>
-              <span class="bb-seo-factor-name">${factor.name}</span>
-              <span class="bb-seo-factor-score">${factor.score}/${factor.maxScore}</span>
-            </div>
-          `).join('')}
-        </div>
-
-        ${keywords.length > 0 ? `
-        <div class="bb-seo-keywords">
-          <div class="bb-seo-keywords-title">주요 키워드</div>
-          <div class="bb-seo-keyword-tags">
-            ${keywords.map(kw =>
-              `<span class="bb-seo-keyword-tag">${typeof kw === 'object' ? kw.word : kw}</span>`
-            ).join('')}
-          </div>
-        </div>
-        ` : ''}
-
-        ${pageData.tags && pageData.tags.length > 0 ? `
-        <div class="bb-seo-keywords">
-          <div class="bb-seo-keywords-title">원본 태그</div>
-          <div class="bb-seo-keyword-tags">
-            ${pageData.tags.map(tag =>
-              `<span class="bb-seo-keyword-tag">#${tag}</span>`
-            ).join('')}
-          </div>
-        </div>
-        ` : ''}
-      `;
-    } catch (error) {
-      console.error('SEO 분석 오류:', error);
-      contentEl.innerHTML = '<div class="bb-seo-error">분석 중 오류가 발생했습니다.<br><small>' + error.message + '</small></div>';
+    } else {
+      // 사이드바가 없으면 새로 생성
+      createAnalysisSidebar();
     }
-  }
-
-  /**
-   * 기본 SEO 점수 계산 (analyzeNaverSEO가 없을 경우)
-   */
-  function calculateBasicSeoScore(data) {
-    const factors = [];
-    let totalScore = 0;
-
-    // 글자수 (1500자 이상)
-    const lengthPass = data.charCount >= 1500;
-    const lengthScore = lengthPass ? 20 : Math.floor(data.charCount / 1500 * 20);
-    factors.push({ name: '글 길이 (1500자+)', pass: lengthPass, score: lengthScore, maxScore: 20 });
-    totalScore += lengthScore;
-
-    // 이미지 (3장 이상)
-    const imagePass = data.imageCount >= 3;
-    const imageScore = imagePass ? 15 : Math.floor(data.imageCount / 3 * 15);
-    factors.push({ name: '이미지 (3장+)', pass: imagePass, score: imageScore, maxScore: 15 });
-    totalScore += imageScore;
-
-    // 소제목 (2개 이상)
-    const subheadingCount = data.subheadings?.length || 0;
-    const subheadingPass = subheadingCount >= 2;
-    const subheadingScore = subheadingPass ? 10 : Math.floor(subheadingCount / 2 * 10);
-    factors.push({ name: '소제목 (2개+)', pass: subheadingPass, score: subheadingScore, maxScore: 10 });
-    totalScore += subheadingScore;
-
-    // 태그 (5개 이상)
-    const tagCount = data.tags?.length || 0;
-    const tagPass = tagCount >= 5;
-    const tagScore = tagPass ? 10 : Math.floor(tagCount / 5 * 10);
-    factors.push({ name: '태그 (5개+)', pass: tagPass, score: tagScore, maxScore: 10 });
-    totalScore += tagScore;
-
-    // 문단 (5개 이상)
-    const paragraphPass = data.paragraphCount >= 5;
-    const paragraphScore = paragraphPass ? 10 : Math.floor(data.paragraphCount / 5 * 10);
-    factors.push({ name: '문단 구분 (5개+)', pass: paragraphPass, score: paragraphScore, maxScore: 10 });
-    totalScore += paragraphScore;
-
-    // 제목 길이 (10-70자)
-    const titleLength = data.title?.length || 0;
-    const titlePass = titleLength >= 10 && titleLength <= 70;
-    const titleScore = titlePass ? 15 : (titleLength > 0 ? 7 : 0);
-    factors.push({ name: '제목 길이 (10-70자)', pass: titlePass, score: titleScore, maxScore: 15 });
-    totalScore += titleScore;
-
-    return { score: Math.min(totalScore, 100), factors };
-  }
-
-  function getSeoScoreClass(score) {
-    if (score >= 80) return 'excellent';
-    if (score >= 60) return 'good';
-    if (score >= 40) return 'fair';
-    return 'poor';
   }
 
   // ==================== 초기화 ====================
@@ -2064,6 +1883,24 @@
       }
     }
   }
+
+  // 글쓰기 모드 진입 감지 (SPA 네비게이션 대응)
+  function checkWriteMode() {
+    const href = window.location.href;
+    const isWritePage = href.includes('PostWrite') ||
+        href.includes('postwrite') ||
+        href.includes('editor') ||
+        href.includes('Write') ||
+        href.includes('write');
+
+    if (isWritePage && (!analysisSidebar || !document.body.contains(analysisSidebar))) {
+      createAnalysisSidebar();
+    }
+  }
+
+  // URL 변경 감지 (popstate, hashchange)
+  window.addEventListener('popstate', () => setTimeout(checkWriteMode, 1000));
+  window.addEventListener('hashchange', () => setTimeout(checkWriteMode, 1000));
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);

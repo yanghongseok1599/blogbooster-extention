@@ -575,6 +575,39 @@ body {
   cursor: pointer;
 }
 
+/* 누락 유저 추가 폼 */
+.add-user-form {
+  padding: 12px 16px;
+  background: #f8f9fc;
+  border-bottom: 1px solid var(--border);
+}
+
+.add-user-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.add-user-row input,
+.add-user-row select {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.add-user-row input[type="text"],
+.add-user-row input[type="email"] {
+  flex: 1;
+  min-width: 140px;
+}
+
+.add-user-form .form-hint {
+  display: block;
+  margin-top: 6px;
+}
+
 /* Footer */
 .admin-footer {
   text-align: center;

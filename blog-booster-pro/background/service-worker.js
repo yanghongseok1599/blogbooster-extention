@@ -10,23 +10,152 @@ importScripts('../lib/env-config.js');
 // 관리자 이메일 (env-config.js에서 로드)
 const ADMIN_EMAIL = ENV_CONFIG.adminEmail;
 
-const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-001:generateContent';
+const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
 const DEFAULT_GEMINI_API_KEY = 'AIzaSyBTkLbVrVB6ucdiGiQNuGeWbqOsFHBecp4';
 
-// Gemini API 재시도 헬퍼 (429 Rate Limit, 503 Service Unavailable 대응)
+// ==================== API 키 로테이션 ====================
+const blockedApiKeys = new Map(); // key → 차단 시각 (30분 TTL)
+let rotationIndex = 0;
+
+/**
+ * 공용 API 키 로테이션으로 선택
+ * geminiApiKeys 배열에서 라운드로빈 + 429 블랙리스트 회피
+ */
+async function getRotatedGeminiApiKey(apiKeys) {
+  if (!apiKeys || apiKeys.length === 0) return null;
+
+  const now = Date.now();
+  const BLOCK_DURATION = 30 * 60 * 1000; // 30분
+
+  // 만료된 블랙리스트 정리
+  for (const [key, blockedAt] of blockedApiKeys) {
+    if (now - blockedAt > BLOCK_DURATION) blockedApiKeys.delete(key);
+  }
+
+  // 사용 가능한 키 찾기 (라운드로빈)
+  for (let i = 0; i < apiKeys.length; i++) {
+    const idx = (rotationIndex + i) % apiKeys.length;
+    const key = apiKeys[idx];
+    if (!blockedApiKeys.has(key)) {
+      rotationIndex = (idx + 1) % apiKeys.length;
+      console.log(`[API 로테이션] 키 #${idx + 1}/${apiKeys.length} 선택`);
+      return key;
+    }
+  }
+
+  console.log('[API 로테이션] ❌ 모든 키 차단됨');
+  return null;
+}
+
+/**
+ * 429 에러 시 해당 키를 블랙리스트에 추가
+ */
+function blockApiKey(apiKey) {
+  blockedApiKeys.set(apiKey, Date.now());
+  console.log(`[API 로테이션] 키 차단됨 (30분), 현재 차단: ${blockedApiKeys.size}개`);
+}
+
+// ==================== 일일 사용 제한 ====================
+const DEFAULT_DAILY_LIMIT = 10;
+
+/**
+ * 공용 키 사용 시 일일 사용량 체크 및 증가
+ * @returns {{ allowed: boolean, error?: string, remaining?: number }}
+ */
+async function checkAndIncrementUsage() {
+  try {
+    const userResult = await chrome.storage.local.get(['userInfo']);
+    const userUid = userResult.userInfo?.uid;
+    if (!userUid) return { allowed: true }; // 유저 정보 없으면 통과
+
+    const token = await getFirebaseIdToken();
+    if (!token) return { allowed: true }; // 토큰 없으면 통과 (폴백)
+
+    // 관리자 설정에서 일일 제한 가져오기
+    let dailyLimit = DEFAULT_DAILY_LIMIT;
+    try {
+      const settingsUrl = `${FIRESTORE_BASE_URL}/settings/apiKeys`;
+      const settingsResp = await fetch(settingsUrl, { headers: { 'Authorization': `Bearer ${token}` } });
+      if (settingsResp.ok) {
+        const settings = firestoreDocToJson(await settingsResp.json());
+        if (settings?.dailyLimit) dailyLimit = settings.dailyLimit;
+      }
+    } catch (e) { /* 기본값 사용 */ }
+
+    // 유저 문서에서 오늘 사용량 확인
+    const userDocUrl = `${FIRESTORE_BASE_URL}/users/${encodeURIComponent(userUid)}`;
+    const resp = await fetch(userDocUrl, { headers: { 'Authorization': `Bearer ${token}` } });
+
+    if (!resp.ok) return { allowed: true }; // 조회 실패 시 통과
+
+    const userData = firestoreDocToJson(await resp.json());
+    const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+    const dailyUsage = userData?.dailyUsage || {};
+
+    let todayCount = 0;
+    if (dailyUsage.date === today) {
+      todayCount = dailyUsage.count || 0;
+    }
+
+    if (todayCount >= dailyLimit) {
+      return {
+        allowed: false,
+        error: `오늘 사용 횟수(${dailyLimit}회)를 초과했습니다.\n내일 다시 이용해주세요.\n\n개인 API 키를 입력하면 제한 없이 사용할 수 있습니다.`
+      };
+    }
+
+    // 사용량 +1 업데이트
+    const newUsage = { date: today, count: todayCount + 1 };
+    await fetch(userDocUrl + '?updateMask.fieldPaths=dailyUsage', {
+      method: 'PATCH',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(jsonToFirestoreDoc({ dailyUsage: newUsage }))
+    });
+
+    const remaining = dailyLimit - todayCount - 1;
+    console.log(`[사용량] ${todayCount + 1}/${dailyLimit} (남은 횟수: ${remaining})`);
+    return { allowed: true, remaining };
+
+  } catch (e) {
+    console.error('[사용량] 체크 오류:', e.message);
+    return { allowed: true }; // 오류 시 통과 (서비스 중단 방지)
+  }
+}
+
+// ==================== Gemini API 호출 ====================
+
+// Gemini API 재시도 헬퍼 (429 키 로테이션 + 503 대응)
 async function callGeminiWithRetry(apiKey, requestBody, maxRetries = 2) {
   let lastError = null;
+  let currentKey = apiKey;
+
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      const response = await fetch(`${GEMINI_ENDPOINT}?key=${apiKey}`, {
+      const response = await fetch(`${GEMINI_ENDPOINT}?key=${currentKey}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(requestBody)
       });
 
-      // 429 또는 503이면 재시도
+      // 429 또는 503이면 키 블랙리스트 + 다른 키로 재시도
       if ((response.status === 429 || response.status === 503) && attempt < maxRetries) {
-        const waitTime = (attempt + 1) * 3000; // 3초, 6초
+        blockApiKey(currentKey);
+
+        // 다른 공용 키로 전환 시도
+        try {
+          const keysResult = await chrome.storage.local.get(['geminiApiKeys']);
+          const keys = keysResult.geminiApiKeys;
+          if (keys && keys.length > 0) {
+            const nextKey = await getRotatedGeminiApiKey(keys);
+            if (nextKey) {
+              currentKey = nextKey;
+              console.log(`[Gemini] 429 → 다른 키로 즉시 재시도`);
+              continue;
+            }
+          }
+        } catch (e) { /* 키 로테이션 실패 시 기존 방식 대기 */ }
+
+        const waitTime = (attempt + 1) * 5000; // 5초, 10초
         console.log(`[Gemini] ${response.status} 수신, ${waitTime/1000}초 후 재시도 (${attempt + 1}/${maxRetries})`);
         await new Promise(r => setTimeout(r, waitTime));
         continue;
@@ -318,6 +447,8 @@ async function handleGetApiSettings(sendResponse) {
       success: true,
       settings: {
         hasApiKey: !!settings?.geminiApiKey,
+        geminiApiKeys: settings?.geminiApiKeys || [],
+        dailyLimit: settings?.dailyLimit || 10,
         freeAccessEnabled: settings?.freeAccessEnabled || false,
         youtubeApiKeys: settings?.youtubeApiKeys || [],
         hasYouTubeApiKeys: !!(settings?.youtubeApiKeys && settings.youtubeApiKeys.length > 0),
@@ -333,25 +464,32 @@ async function handleGetApiSettings(sendResponse) {
 
 async function handleGenerateContent(request, sendResponse) {
   try {
-    // Firebase에서 API 키 가져오기 (구독 확인 포함)
+    // API 키 가져오기 (개인 키 우선 → PRO 공용 키)
     let key = request.apiKey;
+    let isPersonalKey = !!request.apiKey;
 
     if (!key) {
-      const apiKeyResult = await getGeminiApiKeyFromFirebase();
-      if (!apiKeyResult.success) {
-        sendResponse({
-          success: false,
-          error: apiKeyResult.error,
-          requireSubscription: apiKeyResult.requireSubscription
-        });
-        return;
-      }
-      key = apiKeyResult.apiKey;
+      const keyResult = await getAvailableGeminiApiKey();
+      key = keyResult.apiKey;
+      isPersonalKey = keyResult.isPersonalKey;
     }
 
     if (!key) {
-      sendResponse({ success: false, error: 'API 키가 설정되지 않았습니다.' });
+      sendResponse({
+        success: false,
+        error: '무료 사용자는 마이페이지에서 개인 Gemini API 키를 입력해주세요.\nPRO 구독 시 공용 API를 무제한 사용할 수 있습니다.',
+        requireSubscription: true
+      });
       return;
+    }
+
+    // 공용 키 사용 시 일일 사용량 체크
+    if (!isPersonalKey) {
+      const usageCheck = await checkAndIncrementUsage();
+      if (!usageCheck.allowed) {
+        sendResponse({ success: false, error: usageCheck.error });
+        return;
+      }
     }
 
     const generatedText = await callGeminiWithRetry(key, {
@@ -706,13 +844,21 @@ async function generateBlogFromDescription(videoInfo, apiKey) {
 
 동영상 내용을 유추하여 유익한 정보 글로 작성해주세요.`;
 
-  // Firebase에서 API 키 가져오기
-  const geminiKey = await getAvailableGeminiApiKey();
-  if (!geminiKey) {
-    throw new Error('PRO 구독이 필요하거나, 마이페이지에서 개인 Gemini API 키를 입력해주세요.');
+  // API 키 가져오기 (개인 키 우선 → PRO 공용 키)
+  const keyResult = await getAvailableGeminiApiKey();
+  if (!keyResult.apiKey) {
+    throw new Error('무료 사용자는 마이페이지에서 개인 Gemini API 키를 입력해주세요.\nPRO 구독 시 공용 API를 무제한 사용할 수 있습니다.');
   }
 
-  return await callGeminiWithRetry(geminiKey, {
+  // 공용 키 사용 시 일일 사용량 체크
+  if (!keyResult.isPersonalKey) {
+    const usageCheck = await checkAndIncrementUsage();
+    if (!usageCheck.allowed) {
+      throw new Error(usageCheck.error);
+    }
+  }
+
+  return await callGeminiWithRetry(keyResult.apiKey, {
     contents: [{ parts: [{ text: prompt }] }],
     generationConfig: {
       temperature: 0.7,
@@ -798,13 +944,21 @@ ${transcript.substring(0, 15000)} ${transcript.length > 15000 ? '... (생략됨)
 
 자막의 핵심 내용을 살려서 유익한 블로그 글로 작성해주세요.`;
 
-  // Firebase에서 API 키 가져오기
-  const geminiKey = await getAvailableGeminiApiKey();
-  if (!geminiKey) {
-    throw new Error('PRO 구독이 필요하거나, 마이페이지에서 개인 Gemini API 키를 입력해주세요.');
+  // API 키 가져오기 (개인 키 우선 → PRO 공용 키)
+  const keyResult = await getAvailableGeminiApiKey();
+  if (!keyResult.apiKey) {
+    throw new Error('무료 사용자는 마이페이지에서 개인 Gemini API 키를 입력해주세요.\nPRO 구독 시 공용 API를 무제한 사용할 수 있습니다.');
   }
 
-  return await callGeminiWithRetry(geminiKey, {
+  // 공용 키 사용 시 일일 사용량 체크
+  if (!keyResult.isPersonalKey) {
+    const usageCheck = await checkAndIncrementUsage();
+    if (!usageCheck.allowed) {
+      throw new Error(usageCheck.error);
+    }
+  }
+
+  return await callGeminiWithRetry(keyResult.apiKey, {
     contents: [{ parts: [{ text: prompt }] }],
     generationConfig: {
       temperature: 0.7,
@@ -1081,13 +1235,21 @@ ${customPrompt}`;
 
 자막의 핵심 내용을 살려서 유익한 블로그 글로 작성해주세요.`;
 
-  // Firebase에서 API 키 가져오기
-  const geminiKey = await getAvailableGeminiApiKey();
-  if (!geminiKey) {
-    throw new Error('PRO 구독이 필요하거나, 마이페이지에서 개인 Gemini API 키를 입력해주세요.');
+  // API 키 가져오기 (개인 키 우선 → PRO 공용 키)
+  const keyResult = await getAvailableGeminiApiKey();
+  if (!keyResult.apiKey) {
+    throw new Error('무료 사용자는 마이페이지에서 개인 Gemini API 키를 입력해주세요.\nPRO 구독 시 공용 API를 무제한 사용할 수 있습니다.');
   }
 
-  return await callGeminiWithRetry(geminiKey, {
+  // 공용 키 사용 시 일일 사용량 체크
+  if (!keyResult.isPersonalKey) {
+    const usageCheck = await checkAndIncrementUsage();
+    if (!usageCheck.allowed) {
+      throw new Error(usageCheck.error);
+    }
+  }
+
+  return await callGeminiWithRetry(keyResult.apiKey, {
     contents: [{ parts: [{ text: prompt }] }],
     generationConfig: {
       temperature: 0.7,
@@ -1129,13 +1291,21 @@ ${customPrompt}`;
 
 동영상 내용을 유추하여 유익한 정보 글로 작성해주세요.`;
 
-  // Firebase에서 API 키 가져오기
-  const geminiKey = await getAvailableGeminiApiKey();
-  if (!geminiKey) {
-    throw new Error('PRO 구독이 필요하거나, 마이페이지에서 개인 Gemini API 키를 입력해주세요.');
+  // API 키 가져오기 (개인 키 우선 → PRO 공용 키)
+  const keyResult = await getAvailableGeminiApiKey();
+  if (!keyResult.apiKey) {
+    throw new Error('무료 사용자는 마이페이지에서 개인 Gemini API 키를 입력해주세요.\nPRO 구독 시 공용 API를 무제한 사용할 수 있습니다.');
   }
 
-  return await callGeminiWithRetry(geminiKey, {
+  // 공용 키 사용 시 일일 사용량 체크
+  if (!keyResult.isPersonalKey) {
+    const usageCheck = await checkAndIncrementUsage();
+    if (!usageCheck.allowed) {
+      throw new Error(usageCheck.error);
+    }
+  }
+
+  return await callGeminiWithRetry(keyResult.apiKey, {
     contents: [{ parts: [{ text: prompt }] }],
     generationConfig: {
       temperature: 0.7,
@@ -1588,9 +1758,21 @@ async function getGeminiApiKeyFromFirebase() {
       if (settingsResponse.ok) {
         const settingsDoc = await settingsResponse.json();
         const settings = firestoreDocToJson(settingsDoc);
-        if (settings && settings.geminiApiKey) {
+
+        // 다중 키 로테이션: geminiApiKeys 배열 우선
+        if (settings?.geminiApiKeys && settings.geminiApiKeys.length > 0) {
+          // 로컬에 키 목록 캐시 (callGeminiWithRetry에서 429 시 사용)
+          await chrome.storage.local.set({ geminiApiKeys: settings.geminiApiKeys });
+          const rotatedKey = await getRotatedGeminiApiKey(settings.geminiApiKeys);
+          if (rotatedKey) {
+            apiKey = rotatedKey;
+          } else if (settings.geminiApiKey) {
+            apiKey = settings.geminiApiKey; // 모든 키 차단 시 단일 키 폴백
+          }
+        } else if (settings?.geminiApiKey) {
           apiKey = settings.geminiApiKey;
         }
+
         freeAccessEnabled = settings?.freeAccessEnabled || false;
         console.log('[PlanCheck] settings 조회 성공, freeAccess:', freeAccessEnabled);
       }
@@ -1702,7 +1884,7 @@ async function getGeminiApiKeyFromFirebase() {
     }
 
     console.log('[PlanCheck] ❌ 최종: PRO 구독 필요 (storedPlan:', storedPlan, ', token:', token ? '있음' : '없음', ')');
-    return { success: false, error: 'PRO 구독이 필요하거나, 마이페이지에서 개인 Gemini API 키를 입력해주세요.', requireSubscription: true };
+    return { success: false, error: '무료 사용자는 마이페이지에서 개인 Gemini API 키를 입력해주세요.\nPRO 구독 시 공용 API를 무제한 사용할 수 있습니다.', requireSubscription: true };
 
   } catch (error) {
     console.error('[PlanCheck] 오류:', error);
@@ -1722,31 +1904,32 @@ async function getGeminiApiKeyFromFirebase() {
 
 /**
  * Gemini API 키 가져오기 (통합 함수)
- * Firebase 우선, 실패 시 로컬 폴백
+ * 1. 개인 API 키 있으면 → 무조건 개인 키 (PRO/무료 모두)
+ * 2. 개인 키 없음 + PRO → 공용 API 키
+ * 3. 개인 키 없음 + 무료 → null (에러)
+ *
+ * @returns {{ apiKey: string|null, isPersonalKey: boolean }}
  */
 async function getAvailableGeminiApiKey() {
-  // 1. 개인 API 키 먼저 확인 (일반 유저도 사용 가능)
+  // 1. 개인 API 키 최우선 (PRO든 무료든)
   try {
     const personalResult = await chrome.storage.sync.get(['geminiApiKey']);
     if (personalResult.geminiApiKey) {
       console.log('[API] 개인 API 키 사용');
-      return personalResult.geminiApiKey;
+      return { apiKey: personalResult.geminiApiKey, isPersonalKey: true };
     }
   } catch (e) { /* ignore */ }
 
-  // 2. Firebase 서버 API 키 (PRO 구독 체크)
+  // 2. 개인 키 없으면 → PRO만 공용 키
   const firebaseResult = await getGeminiApiKeyFromFirebase();
   if (firebaseResult.success) {
-    return firebaseResult.apiKey;
+    console.log('[API] PRO 구독 → 공용 API 키 사용');
+    return { apiKey: firebaseResult.apiKey, isPersonalKey: false };
   }
 
-  // 3. PRO 아니고 개인 키도 없음
-  if (firebaseResult.requireSubscription) {
-    return null;
-  }
-
-  // 4. 기본 API 키 폴백
-  return DEFAULT_GEMINI_API_KEY;
+  // 3. 개인 키도 없고 PRO도 아님
+  console.log('[API] ❌ 개인 API 키 없음 + PRO 구독 없음');
+  return { apiKey: null, isPersonalKey: false };
 }
 
 /**
@@ -1778,10 +1961,24 @@ async function saveApiKeyToFirebase(apiKey, options = {}) {
     // 설정 업데이트
     const newSettings = {
       ...existingSettings,
-      geminiApiKey: apiKey,
       freeAccessEnabled: options.freeAccessEnabled ?? existingSettings.freeAccessEnabled ?? false,
       updatedAt: new Date().toISOString()
     };
+
+    // API 키 (null이 아닌 경우만 업데이트)
+    if (apiKey) {
+      newSettings.geminiApiKey = apiKey;
+    }
+
+    // 다중 Gemini API 키 배열
+    if (options.geminiApiKeys) {
+      newSettings.geminiApiKeys = options.geminiApiKeys;
+    }
+
+    // 일일 사용 제한
+    if (options.dailyLimit !== undefined) {
+      newSettings.dailyLimit = options.dailyLimit;
+    }
 
     const response = await fetchWithTokenRefresh(settingsUrl, {
       method: 'PATCH',

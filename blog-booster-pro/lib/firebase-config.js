@@ -65,21 +65,32 @@ async function signUp(email, password, name, nickname) {
       console.warn('[Firebase] 프로필 업데이트 실패:', profileError.message);
     }
 
-    // Firestore에 사용자 정보 저장 (실패해도 회원가입 자체는 성공으로 처리)
-    try {
-      await firebaseDb.collection('users').doc(user.uid).set({
-        email: email,
-        name: name,
-        nickname: nickname,
-        displayName: nickname,
-        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-        lastLoginAt: firebase.firestore.FieldValue.serverTimestamp(),
-        plan: 'free',
-        usageCount: 0,
-        isActive: true
-      });
-    } catch (firestoreError) {
-      console.warn('[Firebase] Firestore 사용자 정보 저장 실패 (회원가입은 성공):', firestoreError.message);
+    // Firestore에 사용자 정보 저장 (최대 3회 재시도)
+    const userData = {
+      email: email,
+      name: name,
+      nickname: nickname,
+      displayName: nickname,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+      lastLoginAt: firebase.firestore.FieldValue.serverTimestamp(),
+      plan: 'free',
+      usageCount: 0,
+      isActive: true
+    };
+    let firestoreSaved = false;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await firebaseDb.collection('users').doc(user.uid).set(userData);
+        firestoreSaved = true;
+        console.log('[Firebase] Firestore 사용자 정보 저장 성공 (시도 ' + (attempt + 1) + ')');
+        break;
+      } catch (firestoreError) {
+        console.warn('[Firebase] Firestore 저장 실패 (시도 ' + (attempt + 1) + '):', firestoreError.message);
+        if (attempt < 2) await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+      }
+    }
+    if (!firestoreSaved) {
+      console.error('[Firebase] Firestore 사용자 정보 저장 최종 실패 - UID:', user.uid);
     }
 
     return { success: true, user: user };
@@ -97,32 +108,37 @@ async function signIn(email, password) {
     const userCredential = await firebaseAuth.signInWithEmailAndPassword(email, password);
     const user = userCredential.user;
 
-    // Firestore 문서 확인 및 업데이트
-    try {
-      const userDoc = await firebaseDb.collection('users').doc(user.uid).get();
-      if (userDoc.exists) {
-        // 기존 문서 → 로그인 시간만 업데이트
-        await firebaseDb.collection('users').doc(user.uid).update({
-          lastLoginAt: firebase.firestore.FieldValue.serverTimestamp()
-        });
-      } else {
-        // 문서 없음 → 회원가입 때 Firestore 저장이 실패한 경우 → 자동 생성
-        console.log('[Firebase] 유저 문서 없음, 자동 생성:', user.uid);
-        await firebaseDb.collection('users').doc(user.uid).set({
-          email: user.email,
-          name: user.displayName || user.email.split('@')[0],
-          nickname: user.displayName || user.email.split('@')[0],
-          displayName: user.displayName || user.email.split('@')[0],
-          plan: 'free',
-          planExpiry: null,
-          createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-          lastLoginAt: firebase.firestore.FieldValue.serverTimestamp(),
-          usageCount: 0,
-          isActive: true
-        });
+    // Firestore 문서 확인 및 업데이트 (최대 2회 재시도)
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const userDoc = await firebaseDb.collection('users').doc(user.uid).get();
+        if (userDoc.exists) {
+          // 기존 문서 → 로그인 시간만 업데이트
+          await firebaseDb.collection('users').doc(user.uid).update({
+            lastLoginAt: firebase.firestore.FieldValue.serverTimestamp()
+          });
+        } else {
+          // 문서 없음 → 회원가입 때 Firestore 저장이 실패한 경우 → 자동 생성
+          console.log('[Firebase] 유저 문서 없음, 자동 생성:', user.uid);
+          await firebaseDb.collection('users').doc(user.uid).set({
+            email: user.email,
+            name: user.displayName || user.email.split('@')[0],
+            nickname: user.displayName || user.email.split('@')[0],
+            displayName: user.displayName || user.email.split('@')[0],
+            plan: 'free',
+            planExpiry: null,
+            createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+            lastLoginAt: firebase.firestore.FieldValue.serverTimestamp(),
+            usageCount: 0,
+            isActive: true
+          });
+        }
+        console.log('[Firebase] Firestore 로그인 업데이트 성공 (시도 ' + (attempt + 1) + ')');
+        break;
+      } catch (firestoreError) {
+        console.warn('[Firebase] Firestore 업데이트 실패 (시도 ' + (attempt + 1) + '):', firestoreError.message);
+        if (attempt < 1) await new Promise(r => setTimeout(r, 1000));
       }
-    } catch (firestoreError) {
-      console.warn('[Firebase] Firestore 업데이트 실패 (로그인은 성공):', firestoreError.message);
     }
 
     return { success: true, user: user };
@@ -352,7 +368,27 @@ async function syncAuthState() {
         planFetched = true;
         console.log('[syncAuthState] SDK 플랜 확인:', plan);
       } else {
-        console.warn('[syncAuthState] SDK 유저 데이터 없음:', userData.error);
+        // Firestore 문서가 없으면 자동 생성 (회원가입 시 저장 실패한 경우 복구)
+        console.warn('[syncAuthState] Firestore 유저 문서 없음, 자동 생성 시도:', user.uid);
+        try {
+          await firebaseDb.collection('users').doc(user.uid).set({
+            email: user.email,
+            name: user.displayName || user.email.split('@')[0],
+            nickname: user.displayName || user.email.split('@')[0],
+            displayName: user.displayName || user.email.split('@')[0],
+            plan: 'free',
+            planExpiry: null,
+            createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+            lastLoginAt: firebase.firestore.FieldValue.serverTimestamp(),
+            usageCount: 0,
+            isActive: true
+          });
+          plan = 'free';
+          planFetched = true;
+          console.log('[syncAuthState] Firestore 유저 문서 자동 생성 완료');
+        } catch (createError) {
+          console.error('[syncAuthState] Firestore 유저 문서 자동 생성 실패:', createError.message);
+        }
       }
     } catch (e) {
       console.warn('[syncAuthState] SDK 플랜 조회 실패:', e.message);

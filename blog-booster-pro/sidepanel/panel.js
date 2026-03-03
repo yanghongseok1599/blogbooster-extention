@@ -177,7 +177,7 @@ document.addEventListener('DOMContentLoaded', function() {
   }
 
   /**
-   * SEO 분석 패널 열기 (좌측 오버레이)
+   * SEO 분석 사이드바 토글 (에디터 사이드바)
    */
   async function openSeoAnalysisPanel() {
     try {
@@ -387,6 +387,30 @@ document.addEventListener('DOMContentLoaded', function() {
     text = text || '분석 중...';
     loadingOverlay.style.display = show ? 'flex' : 'none';
     loadingText.textContent = text;
+  }
+
+  /**
+   * 생성 버튼 쿨다운 (30초)
+   */
+  var cooldownTimer = null;
+  function startCooldown(btn, seconds) {
+    if (!btn) return;
+    seconds = seconds || 30;
+    var remaining = seconds;
+    var originalText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = remaining + '초 후 다시 생성 가능';
+    cooldownTimer = setInterval(function() {
+      remaining--;
+      if (remaining <= 0) {
+        clearInterval(cooldownTimer);
+        cooldownTimer = null;
+        btn.disabled = false;
+        btn.textContent = originalText;
+      } else {
+        btn.textContent = remaining + '초 후 다시 생성 가능';
+      }
+    }, 1000);
   }
 
   /**
@@ -797,40 +821,46 @@ document.addEventListener('DOMContentLoaded', function() {
       } catch(e) {}
     }
 
-    // SEO 기본 점수
+    // SEO 점수 - NaverSEOAnalyzer v2.0 사용
     var seoScore = 0;
+    var seoGrade = 'F';
     var seoFactors = [];
+    var seoDetails = [];
+    var seoGradeDescription = '';
 
-    // 제목 키워드
-    if (positionMap.title) { seoScore += 25; seoFactors.push({ factor: 'title_keyword', score: 25, status: 'good' }); }
-    else { seoFactors.push({ factor: 'title_keyword', score: 0, status: 'bad' }); }
-
-    // 키워드 밀도
-    if (density >= 1 && density <= 3) { seoScore += 20; seoFactors.push({ factor: 'keyword_density', score: 20, status: 'good' }); }
-    else if (density > 0) { seoScore += 10; seoFactors.push({ factor: 'keyword_density', score: 10, status: 'warning' }); }
-    else { seoFactors.push({ factor: 'keyword_density', score: 0, status: 'bad' }); }
-
-    // 글 길이
-    if (totalLen >= 1500) { seoScore += 20; seoFactors.push({ factor: 'content_length', score: 20, status: 'good' }); }
-    else if (totalLen >= 800) { seoScore += 10; seoFactors.push({ factor: 'content_length', score: 10, status: 'warning' }); }
-    else { seoFactors.push({ factor: 'content_length', score: 0, status: 'bad' }); }
-
-    // 이미지
-    if (images.length >= 3) { seoScore += 15; seoFactors.push({ factor: 'images', score: 15, status: 'good' }); }
-    else if (images.length > 0) { seoScore += 8; seoFactors.push({ factor: 'images', score: 8, status: 'warning' }); }
-    else { seoFactors.push({ factor: 'images', score: 0, status: 'bad' }); }
-
-    // 소제목
-    if (subheadings.length >= 2) { seoScore += 10; seoFactors.push({ factor: 'subheadings', score: 10, status: 'good' }); }
-    else if (subheadings.length > 0) { seoScore += 5; seoFactors.push({ factor: 'subheadings', score: 5, status: 'warning' }); }
-    else { seoFactors.push({ factor: 'subheadings', score: 0, status: 'bad' }); }
-
-    // 태그
-    if (tags.length >= 5) { seoScore += 10; seoFactors.push({ factor: 'tags', score: 10, status: 'good' }); }
-    else if (tags.length > 0) { seoScore += 5; seoFactors.push({ factor: 'tags', score: 5, status: 'warning' }); }
-    else { seoFactors.push({ factor: 'tags', score: 0, status: 'bad' }); }
-
-    var seoGrade = seoScore >= 95 ? 'S' : seoScore >= 85 ? 'A' : seoScore >= 70 ? 'B' : seoScore >= 55 ? 'C' : seoScore >= 40 ? 'D' : 'F';
+    if (typeof NaverSEOAnalyzer !== 'undefined') {
+      var seoResult = NaverSEOAnalyzer.analyze({
+        title: extracted.title || '',
+        content: text,
+        keyword: mainKeyword,
+        imageCount: images.length,
+        subheadingCount: subheadings.length,
+        tagCount: tags.length,
+        tags: tags
+      });
+      seoScore = seoResult.score;
+      seoGrade = seoResult.grade;
+      seoGradeDescription = seoResult.gradeDescription || '';
+      seoDetails = seoResult.details || [];
+      // 호환용 factors 변환
+      seoFactors = seoDetails.map(function(d) {
+        return {
+          factor: d.item,
+          score: d.score,
+          maxScore: d.max,
+          status: d.status === 'good' ? 'good' : d.status === 'warn' ? 'warning' : 'bad',
+          hint: d.hint
+        };
+      });
+    } else {
+      // 폴백: 기본 점수
+      if (positionMap.title) { seoScore += 15; }
+      if (totalLen >= 1500) { seoScore += 15; }
+      if (images.length >= 3) { seoScore += 10; }
+      if (subheadings.length >= 2) { seoScore += 10; }
+      if (tags.length >= 5) { seoScore += 5; }
+      seoGrade = seoScore >= 95 ? 'S' : seoScore >= 85 ? 'A' : seoScore >= 70 ? 'B' : seoScore >= 55 ? 'C' : seoScore >= 40 ? 'D' : 'F';
+    }
 
     // 첫 문장 후킹 유형
     var firstSentence = sentences[0] || '';
@@ -891,7 +921,9 @@ document.addEventListener('DOMContentLoaded', function() {
         maxScore: 100,
         percentage: seoScore,
         grade: seoGrade,
-        factors: seoFactors
+        gradeDescription: seoGradeDescription,
+        factors: seoFactors,
+        details: seoDetails
       }
     };
   }
@@ -957,37 +989,32 @@ document.addEventListener('DOMContentLoaded', function() {
   }
 
   /**
-   * SEO 상세 정보 업데이트
+   * SEO 상세 정보 업데이트 (NaverSEOAnalyzer v2.0)
    */
   function updateSeoDetail(seo) {
-    var factors = seo.factors || [];
-    var factorMap = {};
-    factors.forEach(function(f) { factorMap[f.factor] = f; });
+    var details = seo.details || [];
 
-    // 각 항목 업데이트
-    var items = [
-      { key: 'title_keyword', iconId: 'factorIconTitle', scoreId: 'factorScoreTitle', max: 25 },
-      { key: 'keyword_density', iconId: 'factorIconDensity', scoreId: 'factorScoreDensity', max: 20 },
-      { key: 'content_length', iconId: 'factorIconLength', scoreId: 'factorScoreLength', max: 20 },
-      { key: 'images', iconId: 'factorIconImages', scoreId: 'factorScoreImages', max: 15 },
-      { key: 'subheadings', iconId: 'factorIconSubheadings', scoreId: 'factorScoreSubheadings', max: 10 },
-      { key: 'tags', iconId: 'factorIconTags', scoreId: 'factorScoreTags', max: 10 }
-    ];
-
-    items.forEach(function(item) {
-      var factor = factorMap[item.key] || { score: 0, status: 'bad' };
-      var iconEl = document.getElementById(item.iconId);
-      var scoreEl = document.getElementById(item.scoreId);
+    // NaverSEOAnalyzer v2.0 details 배열 순서대로 업데이트
+    details.forEach(function(d, index) {
+      var iconEl = document.getElementById('factorIcon' + index);
+      var scoreEl = document.getElementById('factorScore' + index);
       var factorEl = scoreEl ? scoreEl.closest('.seo-factor') : null;
 
       if (iconEl) {
-        iconEl.textContent = factor.status === 'good' ? '✅' : (factor.status === 'warning' ? '⚠️' : '❌');
+        if (d.status === 'good') iconEl.textContent = '✅';
+        else if (d.status === 'warn') iconEl.textContent = '⚠️';
+        else if (d.status === 'bad') iconEl.textContent = '❌';
+        else iconEl.textContent = '-';
       }
       if (scoreEl) {
-        scoreEl.textContent = factor.score + '/' + item.max;
+        var scoreDisplay = d.score < 0 ? d.score : d.score + '/' + d.max;
+        scoreEl.textContent = scoreDisplay;
       }
       if (factorEl) {
-        factorEl.className = 'seo-factor ' + factor.status;
+        var statusClass = d.status === 'warn' ? 'warning' : d.status;
+        factorEl.className = 'seo-factor ' + statusClass;
+        // 힌트가 있으면 title로 표시
+        if (d.hint) factorEl.title = d.hint;
       }
     });
   }
@@ -1280,7 +1307,10 @@ document.addEventListener('DOMContentLoaded', function() {
           creativityLevel: creativityLevel,
           lengthRatio: lengthRatio,
           customRequest: customRequest,
-          learnedInsights: learnedInsights
+          learnedInsights: learnedInsights,
+          originalText: currentData.extracted ? currentData.extracted.fullText : '',
+          originalTitle: currentData.extracted ? currentData.extracted.title : '',
+          originalSubheadings: currentData.extracted ? currentData.extracted.subheadings : []
         });
 
       // 서비스 워커에서 API 키를 관리하므로 직접 요청
@@ -1291,6 +1321,7 @@ document.addEventListener('DOMContentLoaded', function() {
         if (chrome.runtime.lastError) {
           alert('글 생성 중 오류가 발생했습니다.');
           showLoading(false);
+          startCooldown(generateBtn, 30);
           return;
         }
 
@@ -1309,6 +1340,7 @@ document.addEventListener('DOMContentLoaded', function() {
           alert(response ? response.error : '글 생성에 실패했습니다.');
         }
         showLoading(false);
+        startCooldown(generateBtn, 30);
       });
     }); // learningInsightsPromise.then 닫기
   }
@@ -1477,6 +1509,8 @@ document.addEventListener('DOMContentLoaded', function() {
     var structure = analysis.structure;
     var keywords = analysis.keywords;
     var style = analysis.style;
+    var isReinterpret = options.creativityLevel === '재해석';
+    var isReference = options.creativityLevel === '참고용';
 
     var prompt = '당신은 네이버 블로그 SEO 전문가이자 콘텐츠 작성 전문가입니다.\n\n';
 
@@ -1522,7 +1556,58 @@ document.addEventListener('DOMContentLoaded', function() {
       prompt += '\n';
     }
 
-    prompt += '[원본 글 구조]\n';
+    // 원본 글 전문 (재해석/참고용일 때 필수)
+    if ((isReinterpret || isReference) && options.originalText) {
+      prompt += '## 원본 글 (반드시 이 글을 기반으로 재작성) ##\n\n';
+      if (options.originalTitle) {
+        prompt += '[원본 제목] ' + options.originalTitle + '\n\n';
+      }
+      // 원본 소제목 구조
+      if (options.originalSubheadings && options.originalSubheadings.length > 0) {
+        prompt += '[원본 소제목 구조]\n';
+        options.originalSubheadings.forEach(function(sh, idx) {
+          prompt += (idx + 1) + '. ' + sh.text + '\n';
+        });
+        prompt += '\n';
+      }
+      // 원본 본문 (너무 길면 잘라서 전달)
+      var originalText = options.originalText;
+      if (originalText.length > 8000) {
+        originalText = originalText.substring(0, 8000) + '\n...(이하 생략)';
+      }
+      prompt += '[원본 본문]\n' + originalText + '\n\n';
+
+      var hasBusinessInfo = options.businessName || options.businessInfo;
+
+      if (isReinterpret) {
+        prompt += '## 핵심 지시 - 재해석 모드 ##\n';
+        prompt += '위 원본 글을 반드시 기반으로 하되, 다음 규칙을 따르세요:\n';
+        prompt += '1. 원본 글의 전체 구조(서론-본론-결론)와 소제목 순서를 그대로 유지하세요.\n';
+        prompt += '2. 원본 글이 다루는 주제, 정보, 핵심 내용을 빠짐없이 포함하세요.\n';
+        prompt += '3. 각 문단의 내용과 의미는 유지하면서, 표현과 문장을 새롭게 바꿔 작성하세요.\n';
+        if (hasBusinessInfo) {
+          prompt += '4. 원본의 사업장명, 상호명, 위치, 가격, 전화번호 등 사업장 고유 정보는 위에 제공된 [사업장/작성자 정보]로 자연스럽게 교체하세요.\n';
+          prompt += '5. 사업장 정보 외의 일반적인 내용(팁, 설명, 경험 등)은 원본의 흐름을 유지하세요.\n';
+        } else {
+          prompt += '4. 원본에 있는 구체적인 정보(가격, 위치, 수치 등)는 그대로 유지하세요.\n';
+        }
+        prompt += (hasBusinessInfo ? '6' : '5') + '. 원본에 없는 내용을 임의로 추가하거나, 원본의 내용을 빼지 마세요.\n';
+        prompt += (hasBusinessInfo ? '7' : '6') + '. 문장 순서와 흐름은 원본을 따르되, 동일한 문장을 그대로 복사하지는 마세요.\n\n';
+      } else {
+        prompt += '## 핵심 지시 - 참고용 모드 ##\n';
+        prompt += '위 원본 글을 참고하여 같은 주제로 글을 작성하세요.\n';
+        prompt += '1. 원본 글의 구조와 흐름을 최대한 따르세요.\n';
+        if (hasBusinessInfo) {
+          prompt += '2. 원본의 사업장 고유 정보(상호명, 위치, 가격 등)는 위에 제공된 [사업장/작성자 정보]로 교체하세요.\n';
+          prompt += '3. 사업장 정보 외의 일반적인 내용은 원본을 참고하여 새롭게 작성하세요.\n';
+        } else {
+          prompt += '2. 원본의 핵심 정보와 데이터를 유지하면서 문장을 새롭게 작성하세요.\n';
+        }
+        prompt += (hasBusinessInfo ? '4' : '3') + '. 원본에 없는 내용을 임의로 추가하지 마세요.\n\n';
+      }
+    }
+
+    prompt += '[원본 글 구조 분석]\n';
     prompt += '- 서론: ' + structure.intro.percent + '% (' + (structure.intro.style || '일반') + ')\n';
     prompt += '- 본론: ' + structure.body.percent + '% (' + structure.body.sectionCount + '개 섹션)\n';
     prompt += '- 결론: ' + structure.conclusion.percent + '% (' + (structure.conclusion.style || '일반') + ')\n';
@@ -1544,7 +1629,14 @@ document.addEventListener('DOMContentLoaded', function() {
     prompt += '- 서브 키워드: ' + (options.subKeywords.length > 0 ? options.subKeywords.join(', ') : '없음') + '\n\n';
 
     prompt += '[요청 사항]\n';
-    prompt += '위 분석된 스타일과 어조를 정확히 반영하여 ' + getCreativityDesc(options.creativityLevel) + ' 새로운 블로그 글을 작성해주세요.\n\n';
+    if (isReinterpret) {
+      prompt += '위 원본 글의 구조와 내용을 유지하면서, 새로운 표현과 문장으로 재작성해주세요.\n';
+      prompt += '원본의 소제목, 문단 순서, 핵심 정보는 그대로 두고 표현만 바꾸세요.\n\n';
+    } else if (isReference) {
+      prompt += '위 원본 글을 최대한 참고하여 같은 주제의 블로그 글을 작성해주세요.\n\n';
+    } else {
+      prompt += '위 분석된 스타일과 어조를 정확히 반영하여 창의적으로 변형하여 새로운 블로그 글을 작성해주세요.\n\n';
+    }
     prompt += '독창성 레벨: ' + options.creativityLevel + '\n';
     prompt += '목표 길이: 약 ' + calculateTargetLength(structure, options.lengthRatio) + '자\n\n';
 
@@ -2134,9 +2226,9 @@ document.addEventListener('DOMContentLoaded', function() {
       console.error('YouTube 블로그 생성 오류:', error);
       alert('생성 중 오류가 발생했습니다.');
     } finally {
-      youtubeGenerateBtn.disabled = false;
       youtubeGenerateBtn.innerHTML = '<span>✨</span> AI로 블로그 글 생성하기';
       showLoading(false);
+      startCooldown(youtubeGenerateBtn, 30);
     }
   }
 
