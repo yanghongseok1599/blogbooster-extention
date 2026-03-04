@@ -298,11 +298,35 @@ const BlogExtractor = {
     const subheadings = [];
     const addedTexts = new Set(); // 중복 방지
 
-    // h2, h3 태그
+    // 문장형 텍스트 판별 (소제목이 아닌 일반 문장 필터링)
+    const isSentence = (text) => {
+      // 따옴표를 벗기고 내부 텍스트로 판별 ("문장입니다." → 문장입니다.)
+      const inner = text.replace(/^[^가-힣a-zA-Z0-9]+|[^가-힣a-zA-Z0-9]+$/g, '').trim();
+      const t = inner || text;
+      // 마침표/온점은 항상 문장
+      if (/[.。]$/.test(t)) return true;
+      // ?나 !는 긴 텍스트(30자 초과)일 때만 문장 판별 (짧으면 소제목일 수 있음)
+      if (t.length > 30 && /[?!]$/.test(t)) return true;
+      // 한국어 문장 어미 (긴 텍스트만)
+      if (t.length > 30 && /(?:니다|니까|에요|해요|세요|네요|거든요|잖아요|는데요|어요|아요|죠|구요|래요|나요)$/.test(t)) return true;
+      // 한국어 문장 어미 (20자 초과 - 짧은 소제목에서도 흔히 사용)
+      if (t.length > 20 && /(?:습니다|입니다|됩니다|했습니다)$/.test(t)) return true;
+      return false;
+    };
+    const isBracketText = (text) => /^\[.+\]$/.test(text);
+    const normalizeForCompare = (text) => text.replace(/^[^가-힣a-zA-Z0-9]+|[^가-힣a-zA-Z0-9]+$/g, '').trim();
+    const isValidHeading = (text) => {
+      const normalized = normalizeForCompare(text);
+      return text && text.length >= 5 && text.length <= 50 &&
+             !addedTexts.has(text) && !addedTexts.has(normalized) &&
+             !isBracketText(text) && !isSentence(text);
+    };
+
+    // 1. h2, h3 태그 (가장 확실한 소제목 - 문장 필터 안 함)
     container.querySelectorAll('h2, h3').forEach(el => {
       const text = el.textContent.trim();
-      if (text && text.length >= 5 && !addedTexts.has(text)) {
-        addedTexts.add(text);
+      if (text && text.length >= 3 && !addedTexts.has(text)) {
+        addedTexts.add(text); addedTexts.add(normalizeForCompare(text));
         subheadings.push({
           text: text,
           type: el.tagName.toLowerCase(),
@@ -311,11 +335,11 @@ const BlogExtractor = {
       }
     });
 
-    // 네이버 스마트에디터3 소제목 스타일
-    container.querySelectorAll('.se-section-title, .se-title-text, .se-sticker-title').forEach(el => {
+    // 2. 네이버 스마트에디터3 소제목 스타일 (명시적 소제목 클래스)
+    container.querySelectorAll('.se-section-title, .se-sticker-title').forEach(el => {
       const text = el.textContent.trim();
-      if (text && text.length >= 5 && !addedTexts.has(text)) {
-        addedTexts.add(text);
+      if (text && text.length >= 3 && !addedTexts.has(text)) {
+        addedTexts.add(text); addedTexts.add(normalizeForCompare(text));
         subheadings.push({
           text: text,
           type: 'section-title',
@@ -324,69 +348,76 @@ const BlogExtractor = {
       }
     });
 
-    // 대괄호 텍스트 제외 헬퍼 (이미지 설명/카테고리 라벨)
-    const isBracketText = (text) => /^\[.+\]$/.test(text);
-
-    // 네이버 스마트에디터3 인용구 스타일 소제목
-    container.querySelectorAll('.se-quotation, .se-section-quotation').forEach(el => {
-      const text = el.textContent.trim();
-      if (text && text.length >= 3 && text.length <= 40 && !addedTexts.has(text) && !isBracketText(text)) {
-        addedTexts.add(text);
-        subheadings.push({
-          text: text,
-          type: 'quotation-heading',
-          level: 2
-        });
-      }
-    });
-
-    // blockquote 태그 (짧은 텍스트만 소제목으로 판단)
-    container.querySelectorAll('blockquote').forEach(el => {
-      const text = el.textContent.trim();
-      if (text && text.length >= 3 && text.length <= 40 && !addedTexts.has(text) && !isBracketText(text)) {
-        addedTexts.add(text);
-        subheadings.push({
-          text: text,
-          type: 'blockquote-heading',
-          level: 2
-        });
-      }
-    });
-
-    // 구분선 + 볼드/큰글씨 조합 (소제목으로 자주 사용)
-    container.querySelectorAll('.se-hr + .se-module-text, .se-section-horizontalLine + .se-section-text').forEach(el => {
-      const boldEl = el.querySelector('strong, b, .se-text-paragraph-align-center');
-      if (boldEl) {
-        const text = boldEl.textContent.trim();
-        if (text && text.length >= 3 && text.length <= 40 && !addedTexts.has(text) && !isBracketText(text)) {
-          addedTexts.add(text);
-          subheadings.push({
-            text: text,
-            type: 'separator-heading',
-            level: 2
-          });
+    // 3. 인용구(따옴표) 스타일 소제목 (짧은 비문장 텍스트만)
+    container.querySelectorAll('.se-section-quotation').forEach(el => {
+      const textEl = el.querySelector('.se-module-text');
+      if (textEl) {
+        const text = textEl.textContent.trim();
+        if (isValidHeading(text)) {
+          addedTexts.add(text); addedTexts.add(normalizeForCompare(text));
+          subheadings.push({ text, type: 'quotation-heading', level: 2 });
         }
       }
     });
 
-    // 문단 시작 볼드 텍스트 (볼드가 문단의 거의 전부인 경우만)
+    // 4. 구분선 바로 뒤 볼드 텍스트 (구분선 + 소제목 패턴)
+    container.querySelectorAll('.se-hr + .se-module-text, .se-section-horizontalLine + .se-section-text').forEach(el => {
+      const boldEl = el.querySelector('strong, b');
+      if (boldEl) {
+        const text = boldEl.textContent.trim();
+        if (isValidHeading(text)) {
+          addedTexts.add(text); addedTexts.add(normalizeForCompare(text));
+          subheadings.push({ text, type: 'separator-heading', level: 2 });
+        }
+      }
+    });
+
+    // 4. 문단 전체가 볼드인 경우만 (볼드 비율 90% 이상)
     container.querySelectorAll('.se-module-text').forEach(el => {
       const firstChild = el.querySelector('strong, b');
       if (firstChild) {
         const text = firstChild.textContent.trim();
         const parentText = el.textContent.trim();
-        if (text && text.length >= 5 && text.length <= 40 &&
+        if (text && text.length >= 5 && text.length <= 50 &&
             parentText.startsWith(text) && !addedTexts.has(text) && !isBracketText(text) &&
-            text.length / parentText.length > 0.85) {
-          addedTexts.add(text);
-          subheadings.push({
-            text: text,
-            type: 'bold-heading',
-            level: 3
-          });
+            text.length / parentText.length > 0.9 && !isSentence(text)) {
+          addedTexts.add(text); addedTexts.add(normalizeForCompare(text));
+          subheadings.push({ text, type: 'bold-heading', level: 3 });
         }
       }
     });
+
+    // 5. 큰 글씨 소제목 (se-fs-fs26 이상 - 명시적 스타일이므로 문장 필터 안 함)
+    container.querySelectorAll('[class*="se-fs-"]').forEach(el => {
+      const cls = el.className || '';
+      const match = cls.match(/se-fs-fs(\d+)/);
+      if (match && parseInt(match[1]) >= 26) {
+        const text = el.textContent.trim();
+        const normalized = normalizeForCompare(text);
+        if (text && text.length >= 3 && text.length <= 50 &&
+            !addedTexts.has(text) && !addedTexts.has(normalized)) {
+          addedTexts.add(text); addedTexts.add(normalized);
+          subheadings.push({ text, type: 'large-text', level: 2 });
+        }
+      }
+    });
+
+    // 6. 인라인 스타일 큰 폰트 (font-size >= 24px - 명시적 스타일이므로 문장 필터 안 함)
+    container.querySelectorAll('[style*="font-size"]').forEach(el => {
+      const style = el.getAttribute('style') || '';
+      const match = style.match(/font-size\s*:\s*(\d+)/);
+      if (match && parseInt(match[1]) >= 24) {
+        const text = el.textContent.trim();
+        const normalized = normalizeForCompare(text);
+        if (text && text.length >= 3 && text.length <= 50 &&
+            !addedTexts.has(text) && !addedTexts.has(normalized)) {
+          addedTexts.add(text); addedTexts.add(normalized);
+          subheadings.push({ text, type: 'large-text', level: 2 });
+        }
+      }
+    });
+
+    // 중앙정렬, 인용구, blockquote는 소제목으로 판별하지 않음 (오탐 너무 많음)
 
     return subheadings;
   },

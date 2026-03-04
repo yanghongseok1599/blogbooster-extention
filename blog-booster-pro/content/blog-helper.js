@@ -27,67 +27,122 @@
     for (const doc of docs) {
       const seMainContainer = doc.querySelector('.se-main-container');
       if (seMainContainer) {
+        // 제목 컴포넌트 제외하고 본문만 추출 (다중 셀렉터로 시도)
+        const titleComponent = seMainContainer.querySelector('.se-component.se-title, .se-component.se-documentTitle, [data-name="Title"]');
         const paragraphs = seMainContainer.querySelectorAll('.se-text-paragraph');
         if (paragraphs.length > 0) {
-          content = Array.from(paragraphs).map(p => p.innerText).join('\n');
-          if (content.trim()) return content;
+          content = Array.from(paragraphs)
+            .filter(p => {
+              if (!titleComponent) return true;
+              // 제목 컴포넌트의 자식이면 제외
+              if (titleComponent.contains(p)) return false;
+              // 제목 컴포넌트와 같은 최상위 컴포넌트에 있으면 제외
+              const parentComp = p.closest('.se-component');
+              if (parentComp && titleComponent.contains(parentComp)) return false;
+              // 구분선 컴포넌트 제외
+              if (parentComp && (parentComp.classList.contains('se-horizontalLine') || parentComp.querySelector('.se-hr'))) return false;
+              return true;
+            })
+            .map(p => p.textContent).join('\n');
+          if (content.trim()) {
+            // 텍스트 기반 제목 제거 (DOM 필터가 실패했을 경우 대비)
+            return _stripTitleFromContent(content);
+          }
         }
-        content = seMainContainer.innerText;
-        if (content.trim()) return content;
+        content = seMainContainer.textContent;
+        if (content.trim()) return _stripTitleFromContent(content);
       }
 
       const seComponents = doc.querySelectorAll('.se-component-content');
       if (seComponents.length > 0) {
-        content = Array.from(seComponents).map(c => c.innerText).join('\n');
-        if (content.trim()) return content;
+        content = Array.from(seComponents).map(c => c.textContent).join('\n');
+        if (content.trim()) return _stripTitleFromContent(content);
       }
 
       const editableAreas = doc.querySelectorAll('[contenteditable="true"]');
       for (const area of editableAreas) {
-        if (area.innerText.trim() && area.innerText.length > 10) {
-          return area.innerText;
+        if (area.textContent.trim() && area.textContent.length > 10) {
+          return _stripTitleFromContent(area.textContent);
         }
       }
 
       const postViewArea = doc.querySelector('#postViewArea, .post_ct, .se_doc_viewer');
-      if (postViewArea) return postViewArea.innerText;
+      if (postViewArea) return _stripTitleFromContent(postViewArea.textContent);
     }
 
     return '';
   }
 
+  // 본문 시작 부분에서 제목 텍스트 제거
+  function _stripTitleFromContent(content) {
+    const title = getTitle();
+    if (!title || title.length < 3) return content;
+    const titleNorm = title.replace(/\s+/g, '').toLowerCase();
+    const lines = content.split('\n');
+    // 첫 3줄 이내에서 제목과 동일한 줄 제거
+    for (let i = 0; i < Math.min(3, lines.length); i++) {
+      const lineNorm = lines[i].trim().replace(/\s+/g, '').toLowerCase();
+      if (lineNorm === titleNorm || (lineNorm.length > 5 && titleNorm.includes(lineNorm)) || (titleNorm.length > 5 && lineNorm.includes(titleNorm))) {
+        lines.splice(i, 1);
+        break;
+      }
+    }
+    return lines.join('\n').trim();
+  }
+
   function getTitle() {
     const titleSelectors = [
+      '.se-title-text .se-text-paragraph span',
+      '.se-title-text .se-text-paragraph',
       '.se-title-text span', '.se-title-text',
+      '.se-documentTitle .se-text-paragraph span',
+      '.se-documentTitle .se-text-paragraph',
       '.se-component.se-title .se-text-paragraph span',
       '.se-component.se-title .se-text-paragraph',
       '[data-name="Title"] .se-text-paragraph',
+      '[data-name="documentTitle"] .se-text-paragraph',
       '[class*="title"] [contenteditable="true"]',
       '#subject', 'input[name="title"]', '.tit_h2', '.pcol1'
     ];
 
-    for (const selector of titleSelectors) {
-      const el = document.querySelector(selector);
-      if (el) {
-        const title = el.value || el.innerText || el.textContent || '';
-        const cleanTitle = title.replace(/제목/g, '').trim();
-        if (cleanTitle) return cleanTitle;
+    function extractTitle(doc) {
+      for (const selector of titleSelectors) {
+        const el = doc.querySelector(selector);
+        if (el) {
+          const title = el.value || el.innerText || el.textContent || '';
+          const cleanTitle = title.replace(/^제목$/g, '').trim();
+          if (cleanTitle && cleanTitle.length >= 2) return cleanTitle;
+        }
       }
+      return '';
     }
 
+    // 메인 문서에서 검색
+    let result = extractTitle(document);
+    if (result) return result;
+
+    // iframe 내부 검색
     const iframes = document.querySelectorAll('iframe');
     for (const iframe of iframes) {
       try {
         const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
-        for (const selector of titleSelectors) {
-          const el = iframeDoc.querySelector(selector);
-          if (el) {
-            const title = el.value || el.innerText || el.textContent || '';
-            const cleanTitle = title.replace(/제목/g, '').trim();
-            if (cleanTitle) return cleanTitle;
-          }
-        }
+        result = extractTitle(iframeDoc);
+        if (result) return result;
       } catch (e) {}
+    }
+
+    // 최후 폴백: getTitleElement()로 찾은 요소에서 직접 텍스트 추출
+    const titleEl = getTitleElement();
+    if (titleEl) {
+      // 자식 p, span에서 텍스트 추출 시도
+      const children = titleEl.querySelectorAll('p, span, [contenteditable]');
+      for (const child of children) {
+        const t = (child.innerText || child.textContent || '').replace(/^제목$/g, '').trim();
+        if (t && t.length >= 2) return t;
+      }
+      // 요소 자체의 텍스트
+      const directText = (titleEl.innerText || titleEl.textContent || '').replace(/^제목$/g, '').trim();
+      if (directText && directText.length >= 2) return directText;
     }
 
     return '';
@@ -95,8 +150,10 @@
 
   function getTitleElement() {
     const titleSelectors = [
+      '.se-component.se-documentTitle',
       '.se-component.se-title',
       '.se-title-text',
+      '[data-name="documentTitle"]',
       '[data-name="Title"]',
       '.se-module-title',
       '#subject',
@@ -123,7 +180,7 @@
   }
 
   function getTitleDocument() {
-    const titleSelectors = ['.se-component.se-title', '.se-title-text', '[data-name="Title"]'];
+    const titleSelectors = ['.se-component.se-documentTitle', '.se-component.se-title', '.se-title-text', '[data-name="documentTitle"]', '[data-name="Title"]'];
 
     for (const selector of titleSelectors) {
       if (document.querySelector(selector)) return document;
@@ -144,42 +201,46 @@
 
   function countCharacters(text) {
     const total = text.replace(/\s/g, '').length;
-    const withSpaces = text.length;
+    const withSpaces = text.replace(/\s+/g, ' ').trim().length;
     return { total, withSpaces };
   }
 
   function analyzeWords(text) {
-    const words = text.match(/[가-힣a-zA-Z0-9]{2,}/g) || [];
+    const rawWords = text.match(/[가-힣a-zA-Z0-9]{2,}/g) || [];
+    const wordStopwords = [
+      '있는', '하는', '되는', '없는', '같은', '다른', '많은', '좋은',
+      '있습니다', '합니다', '됩니다', '없습니다', '같습니다', '봅니다', '줍니다',
+      '있어요', '해요', '돼요', '없어요', '같아요',
+      '했습니다', '됐습니다', '았습니다', '었습니다', '아닙니다', '입니다', '습니다',
+      '만들었습니다', '시작했습니다', '되었습니다', '있었습니다', '했었습니다',
+      '그리고', '하지만', '그래서', '그런데', '그러나', '또한', '그래도', '그러면',
+      '그렇게', '그러니', '그러므로', '따라서', '때문에', '근데', '그럼',
+      '이런', '저런', '그런', '이것', '저것', '그것', '여기', '거기', '저기',
+      '이거', '저거', '그거', '이게', '저게', '그게', '이건', '저건', '그건',
+      '이렇게', '저렇게', '그렇게', '이래서', '그래서',
+      '정말', '진짜', '너무', '매우', '아주', '가장', '더욱', '완전', '엄청', '되게',
+      '오늘', '내일', '어제', '지금', '나중', '최근', '요즘',
+      '때문', '무엇', '어떤', '모든', '정도', '경우', '사실',
+      '하다', '되다', '있다', '없다', '보다', '주다', '같다', '싶다',
+      '하게', '하면', '하고', '해도', '해야', '해서', '하니',
+      '되면', '되고', '되어', '돼서', '되니',
+      '맞고', '날린', '쓰고', '했고', '됐고', '봤고', '갔고', '왔고',
+      '맞았습니다', '알았습니다', '봤습니다', '갔습니다', '됐습니다',
+      '그렇게', '결국', '직접', '사진'
+    ];
     const frequency = {};
-    words.forEach(word => {
-      const lowerWord = word.toLowerCase();
-      frequency[lowerWord] = (frequency[lowerWord] || 0) + 1;
+    rawWords.forEach(word => {
+      // 조사 제거
+      const stripped = stripParticle(word.toLowerCase());
+      if (stripped.length < 2) return;
+      if (wordStopwords.includes(stripped)) return;
+      // 2글자이고 조사로 끝나는 패턴 제거
+      if (stripped.length === 2 && /[을를은는이가의에도로서와과만]$/.test(stripped)) return;
+      // 동사/형용사 어미로만 이루어진 단어 제거
+      if (/^(?:했|됐|봤|갔|왔|썼|먹|잤|샀)/.test(stripped) && stripped.length <= 3) return;
+      frequency[stripped] = (frequency[stripped] || 0) + 1;
     });
     return Object.entries(frequency).sort((a, b) => b[1] - a[1]);
-  }
-
-  function levenshteinDistance(str1, str2) {
-    const m = str1.length, n = str2.length;
-    const dp = Array(m + 1).fill(null).map(() => Array(n + 1).fill(0));
-    for (let i = 0; i <= m; i++) dp[i][0] = i;
-    for (let j = 0; j <= n; j++) dp[0][j] = j;
-    for (let i = 1; i <= m; i++) {
-      for (let j = 1; j <= n; j++) {
-        if (str1[i - 1] === str2[j - 1]) {
-          dp[i][j] = dp[i - 1][j - 1];
-        } else {
-          dp[i][j] = Math.min(dp[i - 1][j - 1] + 1, dp[i - 1][j] + 1, dp[i][j - 1] + 1);
-        }
-      }
-    }
-    return dp[m][n];
-  }
-
-  function calculateSimilarity(str1, str2) {
-    if (!str1 || !str2) return 0;
-    const maxLen = Math.max(str1.length, str2.length);
-    if (maxLen === 0) return 100;
-    return Math.round((1 - levenshteinDistance(str1, str2) / maxLen) * 100);
   }
 
   function showToast(message, type = 'success') {
@@ -209,169 +270,6 @@
       osc.start(ctx.currentTime);
       osc.stop(ctx.currentTime + 0.5);
     } catch (e) {}
-  }
-
-  // ==================== 비교 제목 저장 ====================
-  let comparisonTitles = [];
-  let titleSimilarityEl = null;
-  let titlePanelInterval = null;
-  let comparePanel = null;
-
-  function createTitleSimilarityMessage() {
-    if (titleSimilarityEl) return;
-
-    const titleElement = getTitleElement();
-    const targetDoc = getTitleDocument();
-
-    if (!titleElement) {
-      if (!window.bbTitleRetryCount) window.bbTitleRetryCount = 0;
-      window.bbTitleRetryCount++;
-      if (window.bbTitleRetryCount < 10) {
-        setTimeout(createTitleSimilarityMessage, 500);
-      }
-      return;
-    }
-
-    titleSimilarityEl = targetDoc.createElement('div');
-    titleSimilarityEl.className = 'bb-title-similarity';
-    titleSimilarityEl.id = 'bb-title-similarity';
-    titleSimilarityEl.style.cssText = 'font-family: Pretendard, -apple-system, sans-serif; padding: 8px 0; font-size: 14px; line-height: 1.5;';
-
-    if (titleElement.parentNode) {
-      titleElement.parentNode.insertBefore(titleSimilarityEl, titleElement.nextSibling);
-    }
-
-    startTitlePanelUpdate();
-  }
-
-  function updateTitleSimilarity() {
-    let messageEl = document.getElementById('bb-title-similarity');
-    if (!messageEl) {
-      const targetDoc = getTitleDocument();
-      messageEl = targetDoc.getElementById('bb-title-similarity');
-    }
-    if (!messageEl) return;
-
-    if (comparisonTitles.length === 0) {
-      messageEl.innerHTML = '';
-      return;
-    }
-
-    const currentTitle = getTitle();
-    if (!currentTitle) {
-      messageEl.innerHTML = '';
-      return;
-    }
-
-    let maxSim = 0;
-    comparisonTitles.forEach(t => {
-      const sim = calculateSimilarity(currentTitle, t);
-      if (sim > maxSim) maxSim = sim;
-    });
-
-    if (maxSim >= 70) {
-      messageEl.innerHTML = `<span style="color: #ff6b81; font-weight: 500;">다른 제목들과의 비교 결과 유사성이 높습니다. (유사율 ${maxSim.toFixed(1)}%)</span>`;
-    } else if (maxSim >= 40) {
-      messageEl.innerHTML = `<span style="color: #FFC107; font-weight: 500;">다른 제목들과의 비교 결과 유사성이 중간입니다. (유사율 ${maxSim.toFixed(1)}%)</span>`;
-    } else {
-      messageEl.innerHTML = `<span style="color: #8BC34A; font-weight: 500;">다른 제목들과의 비교 결과 유사성이 낮습니다. (유사율 ${maxSim.toFixed(1)}%)</span>`;
-    }
-
-    updateComparePanel();
-  }
-
-  function startTitlePanelUpdate() {
-    if (titlePanelInterval) clearInterval(titlePanelInterval);
-    updateTitleSimilarity();
-    titlePanelInterval = setInterval(updateTitleSimilarity, 500);
-  }
-
-  function createComparePanel() {
-    if (comparePanel) {
-      comparePanel.classList.remove('bb-hidden');
-      return;
-    }
-
-    comparePanel = document.createElement('div');
-    comparePanel.className = 'bb-compare-panel';
-    comparePanel.innerHTML = `
-      <div class="bb-compare-header">
-        <span>📝 비교 제목 설정</span>
-        <button class="bb-compare-close">✕</button>
-      </div>
-      <div class="bb-compare-body">
-        <div class="bb-compare-input-wrap">
-          <input type="text" id="bb-compare-input" placeholder="비교할 제목 입력">
-          <button id="bb-add-compare">+</button>
-        </div>
-        <div class="bb-compare-list" id="bb-compare-list">
-          <div class="bb-compare-empty">비교할 제목을 추가하세요</div>
-        </div>
-      </div>
-    `;
-
-    document.body.appendChild(comparePanel);
-
-    comparePanel.querySelector('.bb-compare-close').addEventListener('click', () => {
-      comparePanel.classList.add('bb-hidden');
-    });
-
-    const input = document.getElementById('bb-compare-input');
-    const addBtn = document.getElementById('bb-add-compare');
-
-    const addTitle = () => {
-      const title = input.value.trim();
-      if (title && !comparisonTitles.includes(title)) {
-        comparisonTitles.push(title);
-        input.value = '';
-        updateComparePanel();
-        updateTitleSimilarity();
-      }
-    };
-
-    addBtn.addEventListener('click', addTitle);
-    input.addEventListener('keypress', (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        addTitle();
-      }
-    });
-
-    updateComparePanel();
-  }
-
-  function updateComparePanel() {
-    const listEl = document.getElementById('bb-compare-list');
-    if (!listEl) return;
-
-    if (comparisonTitles.length === 0) {
-      listEl.innerHTML = '<div class="bb-compare-empty">비교할 제목을 추가하세요</div>';
-      return;
-    }
-
-    const currentTitle = getTitle();
-    listEl.innerHTML = comparisonTitles.map((t, i) => {
-      const sim = calculateSimilarity(currentTitle, t);
-      let cls = 'low';
-      if (sim >= 70) cls = 'high';
-      else if (sim >= 40) cls = 'medium';
-
-      const shortTitle = t.length > 30 ? t.substring(0, 30) + '...' : t;
-      return `<div class="bb-compare-item">
-        <span class="bb-compare-item-title">${shortTitle}</span>
-        <span class="bb-compare-item-sim ${cls}">${sim}%</span>
-        <span class="bb-compare-item-x" data-index="${i}">×</span>
-      </div>`;
-    }).join('');
-
-    listEl.querySelectorAll('.bb-compare-item-x').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        const index = parseInt(e.target.dataset.index);
-        comparisonTitles.splice(index, 1);
-        updateComparePanel();
-        updateTitleSimilarity();
-      });
-    });
   }
 
   // ==================== SEO 분석 ====================
@@ -406,17 +304,90 @@
   // 소제목 개수 세기
   function countSubheadings() {
     let count = 0;
+    const counted = new Set();
     const docs = getAllDocs();
     docs.forEach(doc => {
       // SE4 소제목 컴포넌트
       const seHeadings = doc.querySelectorAll('.se-component.se-text .se-text-paragraph-align-center, .se-section-title, .se-component.se-sectionTitle');
-      count += seHeadings.length;
+      seHeadings.forEach(el => {
+        const t = el.textContent.trim();
+        if (t.length > 2 && t.length < 50 && !counted.has(t)) { counted.add(t); count++; }
+      });
+      // 인용구 소제목
+      const quotations = doc.querySelectorAll('.se-section-quotation .se-text-paragraph');
+      quotations.forEach(el => {
+        const t = el.textContent.trim();
+        if (t.length > 2 && t.length < 50 && !counted.has(t)) { counted.add(t); count++; }
+      });
+      // 큰글씨 소제목 (se-fs-fs26 이상)
+      const largeFonts = doc.querySelectorAll('[class*="se-fs-fs2"], [class*="se-fs-fs3"], [class*="se-fs-fs4"]');
+      largeFonts.forEach(el => {
+        const t = el.textContent.trim();
+        if (t.length > 2 && t.length < 50 && !counted.has(t)) { counted.add(t); count++; }
+      });
       // 굵은 텍스트로 된 소제목
       const boldTexts = doc.querySelectorAll('.se-main-container strong, .se-main-container b');
       boldTexts.forEach(el => {
-        if (el.textContent.length > 3 && el.textContent.length < 50) count++;
+        const t = el.textContent.trim();
+        if (t.length > 3 && t.length < 50 && !counted.has(t)) { counted.add(t); count++; }
       });
+      // 구분선(━━━ 또는 se-hr) 뒤에 오는 짧은 텍스트 = 소제목
+      const components = doc.querySelectorAll('.se-main-container > .se-component');
+      for (let i = 0; i < components.length; i++) {
+        const comp = components[i];
+        const isHR = comp.classList.contains('se-horizontalLine') ||
+                     comp.querySelector('hr, .se-hr') ||
+                     (comp.textContent.trim().match(/^[━─═▬\-_]{3,}$/));
+        if (isHR && i + 1 < components.length) {
+          const nextComp = components[i + 1];
+          const nextText = nextComp.textContent.trim();
+          if (nextText.length > 2 && nextText.length < 50 && !counted.has(nextText)) {
+            // 구분선 바로 뒤 짧은 텍스트는 소제목으로 인정
+            if (!/[.!?]$/.test(nextText) || nextText.length < 25) {
+              counted.add(nextText); count++;
+            }
+          }
+        }
+      }
     });
+    // 텍스트 기반 소제목 감지 (DOM 감지 실패 시)
+    if (count === 0) {
+      const content = getEditorContent();
+      const lines = content.split(/\n/).map(l => l.trim()).filter(l => l.length > 0);
+
+      // 방법 1: 구분선 패턴 뒤의 텍스트
+      for (let i = 0; i < lines.length; i++) {
+        if (/^[━─═▬\-_]{3,}$/.test(lines[i]) && i + 1 < lines.length) {
+          const nextLine = lines[i + 1];
+          if (nextLine.length > 2 && nextLine.length < 50 && !counted.has(nextLine)) {
+            if (!/[.]$/.test(nextLine)) {
+              counted.add(nextLine); count++;
+            }
+          }
+        }
+      }
+
+      // 방법 2: 구분선이 텍스트에 없는 경우 (에디터 컴포넌트로만 존재)
+      // 짧은 독립 문장(마침표 없음)을 소제목으로 감지
+      if (count === 0) {
+        for (let i = 1; i < lines.length; i++) {
+          const line = lines[i];
+          // 소제목 조건: 3~45자, 마침표 없음, 이미지태그 아님
+          if (line.length < 3 || line.length > 45) continue;
+          if (/[.]$/.test(line)) continue;
+          if (/^\[/.test(line)) continue; // [이미지...] 등 제외
+          if (/^#/.test(line)) continue; // 해시태그 제외
+          // 앞뒤에 더 긴 텍스트가 있어야 소제목으로 인정 (고립된 짧은 줄)
+          const prevLine = lines[i - 1] || '';
+          const nextLine = lines[i + 1] || '';
+          const prevIsLong = prevLine.length > 45 || /[.]$/.test(prevLine);
+          const nextIsLong = nextLine.length > 30;
+          if ((prevIsLong || nextIsLong) && !counted.has(line)) {
+            counted.add(line); count++;
+          }
+        }
+      }
+    }
     return Math.min(count, 15);
   }
 
@@ -451,72 +422,90 @@
     return count;
   }
 
-  // 자동 키워드 추출
+  // 한글 조사 제거 (명사 추출용)
+  function stripParticle(word) {
+    // 2글자 조사부터 제거 시도 (긴 조사 우선)
+    const particles2 = ['에서', '에게', '까지', '부터', '으로', '처럼', '만큼', '대로', '이나', '에는', '으로는'];
+    for (const p of particles2) {
+      if (word.endsWith(p) && word.length > p.length + 1) {
+        return word.slice(0, -p.length);
+      }
+    }
+    // 1글자 조사 제거
+    const particles1 = ['을', '를', '은', '는', '이', '가', '의', '에', '도', '로', '서', '와', '과', '만', '란'];
+    for (const p of particles1) {
+      if (word.endsWith(p) && word.length > p.length + 1) {
+        return word.slice(0, -p.length);
+      }
+    }
+    return word;
+  }
+
+  // 자동 키워드 추출 (제목+본문빈도+태그 교차 분석)
   function getAutoKeyword() {
     const title = getTitle();
     const content = getEditorContent();
+    if (!title && !content) return '';
 
     const commonWords = [
-      '있다', '하다', '되다', '이다', '있는', '하는', '되는', '없는',
-      '그리고', '하지만', '그래서', '때문에', '그런', '이런', '저런',
-      '합니다', '입니다', '습니다', '됩니다', '있습니다', '했습니다',
+      '있다', '하다', '되다', '이다', '있는', '하는', '되는', '없는', '같은', '다른',
+      '그리고', '하지만', '그래서', '때문에', '그런', '이런', '저런', '그런데', '그러나',
+      '합니다', '입니다', '습니다', '됩니다', '있습니다', '했습니다', '됐습니다',
+      '만들었습니다', '시작했습니다', '되었습니다', '있었습니다', '했었습니다',
       '수있', '것입', '하게', '에서', '으로', '부터', '까지',
-      '트레이너', '블로그', '포스팅', '오늘', '여러분', '안녕',
+      '블로그', '포스팅', '오늘', '여러분', '안녕', '직접', '결국',
       '알려주는', '방법', '추천', '소개', '정리', '후기', '리뷰',
-      '가이드', '완벽', '총정리', '꿀팁', '필독'
+      '가이드', '완벽', '총정리', '꿀팁', '필독', '사기', '맞고', '날린'
     ];
 
-    const titleWords = title.match(/[가-힣]{3,}/g) || [];
-    const sortedTitleWords = titleWords.sort((a, b) => b.length - a.length);
-
-    for (const word of sortedTitleWords) {
-      if (word.length >= 4 && content.includes(word)) {
-        if (!commonWords.some(cw => word.includes(cw) || cw.includes(word))) {
-          return word;
-        }
+    // 제목에서 단어 추출 (한글 + 영문+숫자 혼합 지원)
+    const rawTitleWords = title.match(/[가-힣a-zA-Z0-9]{2,}/g) || [];
+    // 조사 제거 후 중복 없이 정리
+    const titleWords = [];
+    const titleWordSet = new Set();
+    for (const raw of rawTitleWords) {
+      const stripped = stripParticle(raw);
+      if (stripped.length >= 2 && !titleWordSet.has(stripped)) {
+        titleWordSet.add(stripped);
+        titleWords.push(stripped);
       }
     }
 
-    for (const word of sortedTitleWords) {
-      if (word.length >= 3) {
-        const regex = new RegExp(word, 'g');
-        const matches = content.match(regex);
-        if (matches && matches.length >= 2) {
-          if (!commonWords.some(cw => word.includes(cw) || cw.includes(word))) {
-            return word;
-          }
-        }
-      }
+    // 본문 단어 빈도 (조사 제거 후)
+    const rawBodyWords = content.match(/[가-힣a-zA-Z0-9]{2,}/g) || [];
+    const bodyFreq = {};
+    rawBodyWords.forEach(w => {
+      const s = stripParticle(w);
+      if (s.length >= 2) bodyFreq[s] = (bodyFreq[s] || 0) + 1;
+    });
+
+    // 후보 점수 계산
+    const candidates = [];
+    for (const tw of titleWords) {
+      if (commonWords.some(cw => tw === cw || (tw.length <= 3 && cw.includes(tw)))) continue;
+      const freq = bodyFreq[tw] || 0;
+      const lengthBonus = tw.length >= 4 ? 5 : 0;
+      // 영문+한글 복합어 보너스 (예: AI블로그자동화)
+      const mixedBonus = /[a-zA-Z]/.test(tw) && /[가-힣]/.test(tw) ? 10 : 0;
+      candidates.push({ word: tw, score: freq + lengthBonus + mixedBonus + tw.length });
     }
 
-    const words = analyzeWords(content);
-    if (words.length === 0) return '';
+    // 점수 순 정렬
+    candidates.sort((a, b) => b.score - a.score);
+    if (candidates.length > 0) return candidates[0].word;
 
+    // 폴백: 본문에서 가장 많이 나온 단어 중 제목에 포함된 것
+    const sortedBody = Object.entries(bodyFreq).sort((a, b) => b[1] - a[1]);
     const titleLower = title.toLowerCase();
-    for (const [word, count] of words) {
+    for (const [word, count] of sortedBody) {
       if (word.length >= 3 && count >= 2 && titleLower.includes(word.toLowerCase())) {
-        if (!commonWords.some(cw => word.includes(cw))) {
-          return word;
-        }
+        if (!commonWords.some(cw => word === cw)) return word;
       }
     }
 
-    for (const [word, count] of words) {
-      if (word.length >= 4 && count >= 3 && !commonWords.some(cw => word.includes(cw))) {
-        return word;
-      }
-    }
-
-    for (const [word, count] of words) {
-      if (word.length >= 3 && count >= 2 && !commonWords.some(cw => word.includes(cw))) {
-        return word;
-      }
-    }
-
-    for (const [word] of words) {
-      if (word.length >= 2 && !commonWords.includes(word)) {
-        return word;
-      }
+    // 최종 폴백: 제목에서 가장 긴 단어
+    if (titleWords.length > 0) {
+      return titleWords.sort((a, b) => b.length - a.length)[0];
     }
 
     return '';
@@ -554,7 +543,7 @@
     }
 
     // 핵심 결론 체크 (수치, 구체적 정보 포함 여부)
-    const hasConcreteInfo = /\d+[개대평명원시간분%년월일]|[\d,]+원|[\d.]+km/.test(firstPara);
+    const hasConcreteInfo = /\d+[개대평명원시간분%년월일만억천건회]|[\d,]+만?\s*원|[\d.]+km/.test(firstPara);
     const hasResultWord = /(결과|정리|비교|추천|핵심|중요|필수|가격|위치|시간)/.test(firstPara);
 
     if (!hasConcreteInfo && !hasResultWord) {
@@ -650,7 +639,7 @@
     let hint = '';
 
     // F (Fact): 수치, 단위, 스펙 포함
-    const hasFact = /\d+[개대평명원시간분초%년월일주회]|[\d,]+원|[\d.]+km|[\d.]+kg|[\d.]+m²/.test(content);
+    const hasFact = /\d+[개대평명원시간분초%년월일주회만억천건]|[\d,]+만?\s*원|[\d.]+km|[\d.]+kg|[\d.]+m²/.test(content);
     if (hasFact) {
       score += 5;
       elements.push('F');
@@ -670,8 +659,8 @@
       elements.push('R');
     }
 
-    // E (Experience): 느낌/결과 표현
-    const hasExperience = /(느꼈|좋았|편했|만족|추천|아쉬웠|불편|최고|괜찮|별로|솔직히)/.test(content);
+    // E (Experience): 느낌/결과/평가/감정 표현
+    const hasExperience = /(느꼈|좋았|편했|만족|추천|아쉬웠|불편|최고|괜찮|별로|솔직히|결심|깨달|확실|강추|놓치지|대박|신세계|후회|뿌듯|다행|감동|놀라)/.test(content);
     if (hasExperience) {
       score += 5;
       elements.push('E');
@@ -987,26 +976,45 @@
 
   // ==================== 타자수 추적 ====================
   let keystrokeCount = 0;
-  let lastTextLength = 0;
 
   function setupKeystrokeTracking() {
-    function trackTextChanges() {
-      const currentText = getEditorContent();
-      const currentLength = currentText.length;
+    if (window._bbKeystrokeTrackingStarted) return;
+    window._bbKeystrokeTrackingStarted = true;
 
-      if (lastTextLength > 0) {
-        const diff = Math.abs(currentLength - lastTextLength);
-        if (diff > 0 && diff < 100) {
-          keystrokeCount += diff;
-          updateKeystrokeDisplay();
-        }
-      }
+    const ignoreKeys = new Set([
+      'Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'NumLock', 'ScrollLock',
+      'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown',
+      'Escape', 'Tab', 'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12',
+      'Insert', 'ContextMenu', 'PrintScreen', 'Pause'
+    ]);
 
-      lastTextLength = currentLength;
+    function handleKeydown(e) {
+      if (ignoreKeys.has(e.key)) return;
+      if (e.ctrlKey || e.metaKey) return;
+      keystrokeCount++;
+      updateKeystrokeDisplay();
     }
 
-    lastTextLength = getEditorContent().length;
-    setInterval(trackTextChanges, 500);
+    function attachListeners() {
+      const docs = [document];
+      document.querySelectorAll('iframe').forEach(iframe => {
+        try {
+          const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+          if (iframeDoc) docs.push(iframeDoc);
+        } catch (e) {}
+      });
+      docs.forEach(doc => {
+        doc.querySelectorAll('[contenteditable="true"]').forEach(el => {
+          if (!el._bbKeystrokeAttached) {
+            el.addEventListener('keydown', handleKeydown);
+            el._bbKeystrokeAttached = true;
+          }
+        });
+      });
+    }
+
+    attachListeners();
+    setInterval(attachListeners, 3000);
   }
 
   function updateKeystrokeDisplay() {
@@ -1838,25 +1846,328 @@
   }
 
   /**
-   * SEO 분석 패널 토글 (에디터 사이드바 토글)
+   * SEO 분석 패널 토글
    */
   function toggleSeoPanel() {
-    // 에디터 사이드바가 있으면 토글
-    if (analysisSidebar && document.body.contains(analysisSidebar)) {
-      if (analysisSidebar.classList.contains('bb-hidden')) {
-        analysisSidebar.classList.remove('bb-hidden');
-        startSidebarUpdate();
-      } else {
-        analysisSidebar.classList.add('bb-hidden');
-        if (sidebarUpdateInterval) {
-          clearInterval(sidebarUpdateInterval);
-          sidebarUpdateInterval = null;
+    const existingPanel = document.getElementById('bb-seo-panel');
+    if (existingPanel) {
+      existingPanel.remove();
+      return;
+    }
+    createSeoPanelOverlay();
+  }
+
+  /**
+   * SEO 분석 패널 오버레이 생성
+   */
+  function createSeoPanelOverlay() {
+    // 기존 패널이 있으면 제거
+    const existing = document.getElementById('bb-seo-panel');
+    if (existing) existing.remove();
+
+    const panel = document.createElement('div');
+    panel.id = 'bb-seo-panel';
+    panel.innerHTML = `
+      <div class="bb-seo-panel-header">
+        <span class="bb-seo-panel-title">📊 SEO 분석</span>
+        <button class="bb-seo-panel-close" id="bbSeoPanelClose">✕</button>
+      </div>
+      <div class="bb-seo-panel-content" id="bbSeoPanelContent">
+        <div class="bb-seo-loading">분석 중...</div>
+      </div>
+    `;
+    document.body.appendChild(panel);
+
+    // 닫기 버튼 이벤트
+    document.getElementById('bbSeoPanelClose').addEventListener('click', () => {
+      panel.remove();
+    });
+
+    // 애니메이션을 위해 약간의 딜레이 후 활성화
+    setTimeout(() => panel.classList.add('active'), 10);
+
+    // SEO 분석 실행
+    runSeoAnalysisForPanel();
+  }
+
+  /**
+   * SEO 분석 실행하여 패널에 표시
+   */
+  async function runSeoAnalysisForPanel() {
+    const contentEl = document.getElementById('bbSeoPanelContent');
+    if (!contentEl) return;
+
+    try {
+      // 페이지 콘텐츠 추출 (BlogExtractor 사용)
+      const pageData = window.BlogExtractor ? window.BlogExtractor.extract() : null;
+
+      if (!pageData || !pageData.fullText) {
+        contentEl.innerHTML = '<div class="bb-seo-error">블로그 글을 찾을 수 없습니다.<br><small>블로그 글 페이지에서 사용해주세요.</small></div>';
+        return;
+      }
+
+      // 문단 구분된 content 생성 (NaverSEOAnalyzer의 getFirstParagraph가 \n으로 분리)
+      const paragraphTexts = (pageData.paragraphs || [])
+        .map(p => typeof p === 'string' ? p : (p.text || ''))
+        .filter(t => t.length > 10);
+      const contentWithBreaks = paragraphTexts.length > 0
+        ? paragraphTexts.join('\n\n')
+        : pageData.fullText;
+
+      // SEO 분석용 데이터 변환
+      const seoData = {
+        title: pageData.title,
+        content: contentWithBreaks,
+        paragraphs: pageData.paragraphs,
+        images: pageData.images,
+        tags: pageData.tags,
+        subheadings: pageData.subheadings,
+        charCount: pageData.stats?.charCount || pageData.fullText.length,
+        paragraphCount: pageData.stats?.paragraphCount || pageData.paragraphs?.length || 0,
+        imageCount: pageData.stats?.imageCount || pageData.images?.length || 0
+      };
+
+      // 키워드 추출 (제목+본문빈도+태그 교차 분석)
+      let autoKeyword = '';
+      {
+        const kwTitle = pageData.title || '';
+        const kwText = pageData.fullText || '';
+        const titleWords = kwTitle.match(/[가-힣a-zA-Z0-9]{2,}/g) || [];
+        const bodyWords = kwText.match(/[가-힣a-zA-Z0-9]{2,}/g) || [];
+        const bodyFreq = {};
+        bodyWords.forEach(w => { bodyFreq[w] = (bodyFreq[w] || 0) + 1; });
+        const cleanTags = (pageData.tags || []).map(t => t.replace(/^#/, '').trim()).filter(t => t.length >= 2);
+        const kwStopwords = ['있는', '하는', '되는', '그리고', '하지만', '그래서', '그런데', '그러나',
+          '또한', '이런', '저런', '이것', '저것', '때문', '정말', '진짜', '너무', '매우',
+          '아주', '가장', '더욱', '오늘', '내일', '어제', '결국', '이렇게', '블로그'];
+        const candidates = [];
+        titleWords.forEach(tw => {
+          if (kwStopwords.includes(tw)) return;
+          const freq = bodyFreq[tw] || 0;
+          const tagBonus = cleanTags.some(tag => tag.includes(tw) || tw.includes(tag)) ? 10 : 0;
+          const compoundBonus = kwTitle.includes(tw) && tw.length >= 4 ? 5 : 0;
+          candidates.push({ word: tw, score: freq + tagBonus + compoundBonus + tw.length });
+        });
+        cleanTags.forEach(tag => {
+          if (tag.length >= 2 && !kwStopwords.includes(tag)) {
+            const inTitle = kwTitle.includes(tag);
+            const freq = bodyFreq[tag] || 0;
+            candidates.push({ word: tag, score: freq + (inTitle ? 20 : 0) + tag.length });
+          }
+        });
+        candidates.sort((a, b) => b.score - a.score);
+        const seen = {};
+        for (const c of candidates) {
+          if (!seen[c.word]) { autoKeyword = c.word; break; }
+          seen[c.word] = true;
+        }
+        if (!autoKeyword && titleWords.length > 0) {
+          autoKeyword = titleWords.sort((a,b) => b.length - a.length)[0] || '';
         }
       }
-    } else {
-      // 사이드바가 없으면 새로 생성
-      createAnalysisSidebar();
+
+      // SEO 분석 (NaverSEOAnalyzer 사용)
+      const seoResult = typeof NaverSEOAnalyzer !== 'undefined'
+        ? NaverSEOAnalyzer.analyze({
+            title: seoData.title,
+            content: seoData.content,
+            keyword: autoKeyword,
+            imageCount: seoData.imageCount,
+            subheadingCount: seoData.subheadings?.length || 0,
+            tagCount: seoData.tags?.length || 0,
+            tags: seoData.tags || []
+          })
+        : calculateBasicSeoScore(seoData);
+
+      // 키워드 목록 추출 (빈도 기반 정렬, 불용어 제거)
+      const stopwords = [
+        '있는', '하는', '되는', '없는', '같은', '다른', '많은', '좋은',
+        '있습니다', '합니다', '됩니다', '없습니다', '같습니다', '봅니다', '줍니다',
+        '있어요', '해요', '돼요', '없어요', '같아요',
+        '했습니다', '됐습니다', '았습니다', '었습니다', '아닙니다', '입니다', '습니다',
+        '그리고', '하지만', '그래서', '그런데', '그러나', '또한', '그래도', '그러면',
+        '그렇게', '그러니', '그러므로', '따라서', '때문에', '근데', '그럼',
+        '이런', '저런', '그런', '이것', '저것', '그것', '여기', '거기', '저기',
+        '이거', '저거', '그거', '이게', '저게', '그게', '이건', '저건', '그건',
+        '이렇게', '저렇게', '그렇게',
+        '정말', '진짜', '너무', '매우', '아주', '가장', '더욱', '완전', '엄청', '되게',
+        '오늘', '내일', '어제', '지금', '나중', '최근', '요즘',
+        '때문', '무엇', '어떤', '모든', '것이', '수가', '것은', '것을', '정도', '경우',
+        '글을', '글이', '글은', '말을', '말이', '말은',
+        '있으신가요', '않았는데', '올리려고', '어느새', '하나', '있을',
+        '위해', '통해', '대한', '에서', '으로', '부터', '까지', '처럼',
+        '하다', '되다', '있다', '없다', '보다', '주다', '같다', '싶다',
+        '하게', '하면', '하고', '해도', '해야', '해서', '하니',
+        '되면', '되고', '되어', '돼서', '되니'
+      ];
+      let extractedKeywords = [];
+      const allWords = (pageData.fullText || '').match(/[가-힣]{2,}/g) || [];
+      const wordFreq = {};
+      allWords.forEach(w => {
+        if (stopwords.includes(w)) return;
+        if (w.length === 2 && /[을를은는이가의에도로서와과만]$/.test(w)) return;
+        wordFreq[w] = (wordFreq[w] || 0) + 1;
+      });
+      extractedKeywords = Object.entries(wordFreq)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 10)
+        .map(([word]) => word);
+
+      // NaverSEOAnalyzer: details 배열 / BasicScore: factors 배열
+      const detailItems = seoResult.details || seoResult.factors || [];
+
+      // 항목별 기준 설명
+      const criteriaMap = {
+        '첫 문단 품질': '인사말 없이 핵심 정보를 바로 제시하는지 평가',
+        '콘텐츠 구조': '목차와 소제목(3개+)으로 체계적으로 구성했는지 평가',
+        'FIRE 공식': 'Fact(사실) + Interpretation(해석) + Real(실경험) + Experience(느낌)',
+        '제목 최적화': '메인 키워드 포함 + 구체적 수치 + 키워드 앞배치',
+        '이미지 활용': '5장 이상 이미지로 시각적 정보를 제공하는지 평가',
+        '신뢰성 요소': '출처 링크, 구체적 데이터, 자격/경력 등 신뢰 근거',
+        '태그': '5개 이상 태그 + 메인 키워드 태그 포함 여부',
+        '감점 요소': '키워드 과다 반복(15회+), 불확실한 표현 반복 감점'
+      };
+
+      // 결과 표시
+      contentEl.innerHTML = `
+        <div class="bb-seo-score-section">
+          <div class="bb-seo-score-circle ${getSeoScoreClass(seoResult.score)}">
+            <span class="bb-seo-score-value">${seoResult.score}</span>
+          </div>
+          <div class="bb-seo-score-label">SEO 점수</div>
+        </div>
+
+        <div class="bb-seo-stats">
+          <div class="bb-seo-stat">
+            <span class="bb-seo-stat-label">글자수</span>
+            <span class="bb-seo-stat-value">${seoData.charCount.toLocaleString()}자</span>
+          </div>
+          <div class="bb-seo-stat">
+            <span class="bb-seo-stat-label">문단</span>
+            <span class="bb-seo-stat-value">${seoData.paragraphCount}개</span>
+          </div>
+          <div class="bb-seo-stat">
+            <span class="bb-seo-stat-label">이미지</span>
+            <span class="bb-seo-stat-value">${seoData.imageCount}장</span>
+          </div>
+        </div>
+
+        <div class="bb-seo-factors">
+          <div class="bb-seo-factors-title">상세 항목</div>
+          ${detailItems.map(d => {
+            const name = d.item || d.name || '';
+            const score = d.score || 0;
+            const max = d.max || d.maxScore || 0;
+            const status = d.status || (d.pass === true ? 'good' : 'bad');
+            const icon = status === 'good' ? '✅' : (status === 'warn' ? '⚠️' : '❌');
+            const scoreDisplay = score < 0 ? score : `${score}/${max}`;
+            const criteria = criteriaMap[name] || '';
+            return `
+            <div class="bb-seo-factor-wrap">
+              <div class="bb-seo-factor ${status === 'good' ? 'pass' : (status === 'warn' ? 'warn' : 'fail')}">
+                <span class="bb-seo-factor-icon">${icon}</span>
+                <span class="bb-seo-factor-name">${name}</span>
+                ${criteria ? `<span class="bb-seo-factor-info" title="기준 설명">ℹ</span>` : ''}
+                <span class="bb-seo-factor-score">${scoreDisplay}</span>
+              </div>
+              ${criteria ? `<div class="bb-seo-factor-criteria">${criteria}</div>` : ''}
+              ${d.hint ? `<div class="bb-seo-factor-hint">${d.hint}</div>` : ''}
+            </div>`;
+          }).join('')}
+        </div>
+
+        ${extractedKeywords.length > 0 ? `
+        <div class="bb-seo-keywords">
+          <div class="bb-seo-keywords-title">주요 키워드</div>
+          <div class="bb-seo-keyword-tags">
+            ${extractedKeywords.map(kw =>
+              `<span class="bb-seo-keyword-tag">${kw}</span>`
+            ).join('')}
+          </div>
+        </div>
+        ` : ''}
+
+        ${pageData.tags && pageData.tags.length > 0 ? `
+        <div class="bb-seo-keywords">
+          <div class="bb-seo-keywords-title">원본 태그</div>
+          <div class="bb-seo-keyword-tags">
+            ${pageData.tags.map(tag =>
+              `<span class="bb-seo-keyword-tag">#${tag}</span>`
+            ).join('')}
+          </div>
+        </div>
+        ` : ''}
+      `;
+
+      // ℹ 아이콘 클릭 이벤트 (이벤트 위임)
+      contentEl.addEventListener('click', function(e) {
+        const infoBtn = e.target.closest('.bb-seo-factor-info');
+        if (!infoBtn) return;
+        const wrap = infoBtn.closest('.bb-seo-factor-wrap');
+        if (!wrap) return;
+        const criteria = wrap.querySelector('.bb-seo-factor-criteria');
+        if (criteria) criteria.classList.toggle('show');
+      });
+    } catch (error) {
+      console.error('SEO 분석 오류:', error);
+      contentEl.innerHTML = '<div class="bb-seo-error">분석 중 오류가 발생했습니다.<br><small>' + error.message + '</small></div>';
     }
+  }
+
+  /**
+   * 기본 SEO 점수 계산 (analyzeNaverSEO가 없을 경우)
+   */
+  function calculateBasicSeoScore(data) {
+    const factors = [];
+    let totalScore = 0;
+
+    // 글자수 (1500자 이상)
+    const lengthPass = data.charCount >= 1500;
+    const lengthScore = lengthPass ? 20 : Math.floor(data.charCount / 1500 * 20);
+    factors.push({ name: '글 길이 (1500자+)', pass: lengthPass, score: lengthScore, maxScore: 20 });
+    totalScore += lengthScore;
+
+    // 이미지 (3장 이상)
+    const imagePass = data.imageCount >= 3;
+    const imageScore = imagePass ? 15 : Math.floor(data.imageCount / 3 * 15);
+    factors.push({ name: '이미지 (3장+)', pass: imagePass, score: imageScore, maxScore: 15 });
+    totalScore += imageScore;
+
+    // 소제목 (2개 이상)
+    const subheadingCount = data.subheadings?.length || 0;
+    const subheadingPass = subheadingCount >= 2;
+    const subheadingScore = subheadingPass ? 10 : Math.floor(subheadingCount / 2 * 10);
+    factors.push({ name: '소제목 (2개+)', pass: subheadingPass, score: subheadingScore, maxScore: 10 });
+    totalScore += subheadingScore;
+
+    // 태그 (5개 이상)
+    const tagCount = data.tags?.length || 0;
+    const tagPass = tagCount >= 5;
+    const tagScore = tagPass ? 10 : Math.floor(tagCount / 5 * 10);
+    factors.push({ name: '태그 (5개+)', pass: tagPass, score: tagScore, maxScore: 10 });
+    totalScore += tagScore;
+
+    // 문단 (5개 이상)
+    const paragraphPass = data.paragraphCount >= 5;
+    const paragraphScore = paragraphPass ? 10 : Math.floor(data.paragraphCount / 5 * 10);
+    factors.push({ name: '문단 구분 (5개+)', pass: paragraphPass, score: paragraphScore, maxScore: 10 });
+    totalScore += paragraphScore;
+
+    // 제목 길이 (10-70자)
+    const titleLength = data.title?.length || 0;
+    const titlePass = titleLength >= 10 && titleLength <= 70;
+    const titleScore = titlePass ? 15 : (titleLength > 0 ? 7 : 0);
+    factors.push({ name: '제목 길이 (10-70자)', pass: titlePass, score: titleScore, maxScore: 15 });
+    totalScore += titleScore;
+
+    return { score: Math.min(totalScore, 100), factors };
+  }
+
+  function getSeoScoreClass(score) {
+    if (score >= 80) return 'excellent';
+    if (score >= 60) return 'good';
+    if (score >= 40) return 'fair';
+    return 'poor';
   }
 
   // ==================== 초기화 ====================
@@ -1871,36 +2182,20 @@
     if (isNaverBlog) {
       const isWritePage = pathname.includes('PostWrite') ||
           pathname.includes('postwrite') ||
+          pathname.includes('PostWriteForm') ||
           href.includes('editor') ||
           href.includes('Write') ||
-          href.includes('write');
+          href.includes('write') ||
+          href.includes('actionType=write');
 
       if (isWritePage) {
+        console.log('[블로그부스터] 글쓰기 페이지 감지:', pathname);
         setTimeout(() => {
           createAnalysisSidebar();
-          createTitleSimilarityMessage();
         }, 2000);
       }
     }
   }
-
-  // 글쓰기 모드 진입 감지 (SPA 네비게이션 대응)
-  function checkWriteMode() {
-    const href = window.location.href;
-    const isWritePage = href.includes('PostWrite') ||
-        href.includes('postwrite') ||
-        href.includes('editor') ||
-        href.includes('Write') ||
-        href.includes('write');
-
-    if (isWritePage && (!analysisSidebar || !document.body.contains(analysisSidebar))) {
-      createAnalysisSidebar();
-    }
-  }
-
-  // URL 변경 감지 (popstate, hashchange)
-  window.addEventListener('popstate', () => setTimeout(checkWriteMode, 1000));
-  window.addEventListener('hashchange', () => setTimeout(checkWriteMode, 1000));
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);

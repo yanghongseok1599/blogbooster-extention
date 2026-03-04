@@ -146,8 +146,9 @@ document.addEventListener('DOMContentLoaded', function() {
       var planBadge = userPlan.querySelector('.plan-badge');
       if (planBadge) {
         planBadge.className = 'plan-badge ' + plan;
-        planBadge.textContent = plan === 'pro' ? 'PRO 플랜' :
-                               plan === 'unlimited' ? 'Unlimited 플랜' : '일반 플랜';
+        planBadge.textContent = plan === 'free' ? '무료 플랜' :
+                               plan === 'pro' ? 'Pro 플랜' :
+                               plan === 'premium' ? 'Premium 플랜' : '무료 플랜';
       }
     }
 
@@ -177,7 +178,7 @@ document.addEventListener('DOMContentLoaded', function() {
   }
 
   /**
-   * SEO 분석 사이드바 토글 (에디터 사이드바)
+   * SEO 분석 패널 열기 (좌측 오버레이)
    */
   async function openSeoAnalysisPanel() {
     try {
@@ -390,30 +391,6 @@ document.addEventListener('DOMContentLoaded', function() {
   }
 
   /**
-   * 생성 버튼 쿨다운 (30초)
-   */
-  var cooldownTimer = null;
-  function startCooldown(btn, seconds) {
-    if (!btn) return;
-    seconds = seconds || 30;
-    var remaining = seconds;
-    var originalText = btn.textContent;
-    btn.disabled = true;
-    btn.textContent = remaining + '초 후 다시 생성 가능';
-    cooldownTimer = setInterval(function() {
-      remaining--;
-      if (remaining <= 0) {
-        clearInterval(cooldownTimer);
-        cooldownTimer = null;
-        btn.disabled = false;
-        btn.textContent = originalText;
-      } else {
-        btn.textContent = remaining + '초 후 다시 생성 가능';
-      }
-    }, 1000);
-  }
-
-  /**
    * 탭 전환
    */
   function switchTab(tabId) {
@@ -458,18 +435,11 @@ document.addEventListener('DOMContentLoaded', function() {
       '.se_doc_viewer', '.blog_post_content', 'article', 'main'
     ];
 
-    // script, style 태그를 제거한 클린 텍스트 추출 헬퍼
-    function getCleanText(el) {
-      var clone = el.cloneNode(true);
-      clone.querySelectorAll('script, style, noscript, .se-oglink, .se-module-oglink').forEach(function(s) { s.remove(); });
-      return clone.textContent.replace(/\s+/g, ' ').trim();
-    }
-
     // 셀렉터로 컨테이너 찾기
     var container = null;
     for (var i = 0; i < selectors.length; i++) {
       var el = document.querySelector(selectors[i]);
-      if (el && getCleanText(el).length > 100) {
+      if (el && el.textContent.trim().length > 100) {
         container = el;
         break;
       }
@@ -484,7 +454,7 @@ document.addEventListener('DOMContentLoaded', function() {
         var id = (el.id || '').toLowerCase();
         if (cls.match(/nav|sidebar|footer|header|menu|comment/) ||
             id.match(/nav|sidebar|footer|header|menu|comment/)) return;
-        var len = getCleanText(el).length;
+        var len = el.textContent.trim().length;
         if (len > bestLen && el.querySelectorAll('div').length < 100) {
           bestLen = len;
           best = el;
@@ -495,23 +465,45 @@ document.addEventListener('DOMContentLoaded', function() {
 
     if (!container) return null;
 
-    // 텍스트 추출 (script/style 제거 후)
-    var cleanContainer = container.cloneNode(true);
-    cleanContainer.querySelectorAll('script, style, noscript, .se-oglink, .se-module-oglink').forEach(function(s) { s.remove(); });
-
+    // 텍스트 추출 (BlogExtractor와 동일한 방식)
     var fullText = '';
     var paragraphs = [];
-    cleanContainer.querySelectorAll('p, .se-text-paragraph, .se_textarea, div[class*="text"]').forEach(function(p) {
-      var t = p.textContent.trim();
-      if (t.length > 5) {
-        paragraphs.push({ text: t, length: t.length, element: p.tagName.toLowerCase() });
-        fullText += t + '\n';
-      }
+
+    // 본문 텍스트: cloneNode + textContent (불필요 요소 제거)
+    var clone = container.cloneNode(true);
+    ['script', 'style', 'noscript', '.se-oglink', '.se-module-oglink',
+     '.se-component.se-documentTitle', '.se-component.se-title', '[data-name="Title"]',
+     '.se-component.se-horizontalLine'].forEach(function(sel) {
+      clone.querySelectorAll(sel).forEach(function(el) { el.remove(); });
     });
-    if (!fullText) fullText = cleanContainer.textContent.trim();
+    fullText = clone.textContent.replace(/\s+/g, ' ').trim();
+
+    // 문단 추출
+    var pSelectors = ['.se-text-paragraph', '.se-module-text', 'p', '.post_tx'];
+    for (var pi = 0; pi < pSelectors.length; pi++) {
+      var pEls = container.querySelectorAll(pSelectors[pi]);
+      if (pEls.length > 0) {
+        pEls.forEach(function(el) {
+          var t = el.textContent.trim();
+          if (t.length > 10) {
+            paragraphs.push({ text: t, length: t.length, element: el.tagName.toLowerCase() });
+          }
+        });
+        break;
+      }
+    }
+    if (paragraphs.length === 0) {
+      fullText.split(/[.!?]\s+/).forEach(function(s) {
+        var t = s.trim();
+        if (t.length > 10) {
+          paragraphs.push({ text: t, length: t.length, element: 'p' });
+        }
+      });
+    }
+
     if (fullText.length < 30) return null;
 
-    // 제목 추출
+    // 제목 추출 (문단 필터링에 필요하므로 먼저)
     var title = '';
     var titleSelectors = ['.se-title-text', '.pcol1', '.tit_h3', '#title'];
     for (var j = 0; j < titleSelectors.length; j++) {
@@ -526,66 +518,178 @@ document.addEventListener('DOMContentLoaded', function() {
       if (ogTitle) title = ogTitle.getAttribute('content') || '';
     }
 
-    // 이미지 추출
-    var images = [];
-    container.querySelectorAll('img').forEach(function(img) {
-      var src = img.src || img.dataset.src || '';
-      if (src && !src.includes('icon') && !src.includes('logo') && img.width > 50) {
-        images.push({ src: src, alt: img.alt || '' });
+    // paragraphs에서 제목과 동일한 첫 문단 제거
+    if (title && title.length >= 3 && paragraphs.length > 0) {
+      var _tNrm = title.replace(/\s+/g, '').toLowerCase();
+      var _pNrm = paragraphs[0].text.replace(/\s+/g, '').toLowerCase();
+      if (_pNrm === _tNrm ||
+          (_pNrm.length > 5 && _pNrm.length < _tNrm.length * 3 && _tNrm.indexOf(_pNrm) >= 0) ||
+          (_tNrm.length > 5 && _pNrm.length < _tNrm.length * 3 && _pNrm.indexOf(_tNrm) >= 0)) {
+        paragraphs.shift();
       }
-    });
+    }
 
-    // 태그 추출 (현재 document + 상위 document 모두 검색)
+    // 이미지 추출 (발행 뷰 + 에디터 뷰)
+    var images = [];
+    var seenSrcs = {};
+    // SE4 에디터 이미지 컴포넌트
+    container.querySelectorAll('.se-image-resource, .se-component.se-image img').forEach(function(img) {
+      var src = img.src || img.dataset.src || img.dataset.lazySrc || '';
+      if (src && !seenSrcs[src]) { seenSrcs[src] = true; images.push({ src: src, alt: img.alt || '' }); }
+    });
+    // 일반 이미지 (에디터에서 못 찾으면)
+    if (images.length === 0) {
+      container.querySelectorAll('img').forEach(function(img) {
+        var src = img.src || img.dataset.src || '';
+        if (src && !src.includes('icon') && !src.includes('logo') && !seenSrcs[src]) {
+          // width가 0인 경우(lazy load) 또는 50 초과면 포함
+          if (img.width === 0 || img.width > 50) {
+            seenSrcs[src] = true;
+            images.push({ src: src, alt: img.alt || '' });
+          }
+        }
+      });
+    }
+
+    // 태그 추출 (발행 뷰 + 에디터 뷰 모두 지원)
     var tags = [];
-    var tagSelectors = '.post_tag a, .tag_area a, .wrap_tag a, #tagList a, .post-tag a, .tag_keyword';
-    document.querySelectorAll(tagSelectors).forEach(function(a) {
+    // 발행된 블로그 뷰
+    document.querySelectorAll('.post_tag a, .tag_area a, .wrap_tag a, #tagList a, .post-tag a').forEach(function(a) {
       var tag = a.textContent.trim().replace('#', '');
       if (tag && tags.indexOf(tag) === -1) tags.push(tag);
     });
-    // iframe 안에서 실행 중이면 parent에서도 태그 검색 시도
-    try {
-      if (window !== window.top && window.parent && window.parent.document) {
-        window.parent.document.querySelectorAll(tagSelectors).forEach(function(a) {
-          var tag = a.textContent.trim().replace('#', '');
-          if (tag && tags.indexOf(tag) === -1) tags.push(tag);
+    // 에디터 뷰 (tag_item, se-tag 등)
+    if (tags.length === 0) {
+      document.querySelectorAll('.tag_item, .tag-item, .post_tag span, .se-tag, #tag_post span, .tag_keyword').forEach(function(el) {
+        var tag = el.textContent.trim().replace(/^[#x×✕]\s*/, '').replace(/^#/, '');
+        if (tag && tag.length >= 2 && tags.indexOf(tag) === -1) tags.push(tag);
+      });
+    }
+    // 태그 input 필드 (에디터에서 input으로 관리하는 경우)
+    if (tags.length === 0) {
+      var tagInput = document.querySelector('#tag_post, .tag_input, [class*="tag"] input');
+      if (tagInput && tagInput.value) {
+        tagInput.value.split(',').forEach(function(t) {
+          var tag = t.trim().replace('#', '');
+          if (tag && tag.length >= 2 && tags.indexOf(tag) === -1) tags.push(tag);
         });
       }
-    } catch(e) {}
-    // 메인 페이지에서 실행 중이면 iframe 안에서도 태그 검색 시도
-    try {
-      var mainFrame = document.querySelector('iframe#mainFrame');
-      if (mainFrame && mainFrame.contentDocument) {
-        mainFrame.contentDocument.querySelectorAll(tagSelectors).forEach(function(a) {
-          var tag = a.textContent.trim().replace('#', '');
-          if (tag && tags.indexOf(tag) === -1) tags.push(tag);
+    }
+    // 본문 텍스트에서 해시태그 패턴 감지 (최후 폴백)
+    if (tags.length === 0 && fullText) {
+      var hashMatches = fullText.match(/#[가-힣a-zA-Z0-9_]{2,}/g);
+      if (hashMatches) {
+        hashMatches.forEach(function(h) {
+          var tag = h.replace('#', '');
+          if (tag && tag.length >= 2 && tags.indexOf(tag) === -1) tags.push(tag);
         });
       }
-    } catch(e) {}
+    }
 
-    // 소제목 추출 (중복 방지)
+    // 소제목 추출 (문장 필터링 포함)
     var subheadings = [];
     var addedTexts = {};
-    function addSubheading(text, type) {
+    function isSentenceText(text) {
+      // 따옴표를 벗기고 내부 텍스트로 판별 ("문장입니다." → 문장입니다.)
+      var inner = text.replace(/^[^가-힣a-zA-Z0-9]+|[^가-힣a-zA-Z0-9]+$/g, '').trim();
+      var t = inner || text;
+      // 마침표/온점은 항상 문장
+      if (/[.。]$/.test(t)) return true;
+      // ?나 !는 긴 텍스트(30자 초과)일 때만 문장 판별 (짧으면 소제목일 수 있음)
+      if (t.length > 30 && /[?!]$/.test(t)) return true;
+      // 한국어 문장 어미 (긴 텍스트만)
+      if (t.length > 30 && /(?:니다|니까|에요|해요|세요|네요|거든요|잖아요|는데요|어요|아요|죠|구요|래요|나요)$/.test(t)) return true;
+      // 한국어 문장 어미 (20자 초과 - 짧은 소제목에서도 흔히 사용)
+      if (t.length > 20 && /(?:습니다|입니다|됩니다|했습니다)$/.test(t)) return true;
+      return false;
+    }
+    function normalizeForCompare(text) {
+      // 모든 종류의 따옴표/특수문자를 제거하고 핵심 텍스트만 비교
+      return text.replace(/^[^가-힣a-zA-Z0-9]+|[^가-힣a-zA-Z0-9]+$/g, '').trim();
+    }
+    function addSubheading(text, type, skipSentenceCheck) {
       if (!text || text.length < 3 || text.length > 50) return;
-      // 대괄호로 감싸진 텍스트는 이미지 설명/카테고리일 가능성 높으므로 제외
       if (/^\[.+\]$/.test(text)) return;
-      if (addedTexts[text]) return;
+      // 정규화된 버전으로도 중복 체크
+      var normalized = normalizeForCompare(text);
+      if (addedTexts[text] || addedTexts[normalized]) return;
+      if (!skipSentenceCheck && isSentenceText(text)) return;
       addedTexts[text] = true;
+      addedTexts[normalized] = true;
       subheadings.push({ text: text, type: type });
     }
-    // h2, h3 태그 (가장 확실한 소제목)
+    // 1. h2, h3 태그 (확실한 소제목 - 문장 필터 안 함)
     container.querySelectorAll('h2, h3').forEach(function(el) {
-      addSubheading(el.textContent.trim(), el.tagName);
+      addSubheading(el.textContent.trim(), el.tagName, true);
     });
-    // 네이버 스마트에디터 소제목 스타일
-    container.querySelectorAll('.se-section-title').forEach(function(el) {
-      addSubheading(el.textContent.trim(), 'section-title');
+    // 2. 네이버 스마트에디터3 소제목 스타일 (명시적 소제목 클래스)
+    container.querySelectorAll('.se-section-title, .se-sticker-title').forEach(function(el) {
+      addSubheading(el.textContent.trim(), 'section-title', true);
     });
-    // 인용구 스타일 소제목 (짧은 텍스트만)
-    container.querySelectorAll('.se-quotation').forEach(function(el) {
-      var t = el.textContent.trim();
-      if (t.length <= 40) addSubheading(t, 'quotation');
+    // 3. 인용구(따옴표) 스타일 소제목 (짧은 텍스트만)
+    container.querySelectorAll('.se-section-quotation').forEach(function(el) {
+      var textEl = el.querySelector('.se-module-text');
+      if (textEl) {
+        var t = textEl.textContent.trim();
+        addSubheading(t, 'quotation-heading');
+      }
     });
+    // 4. 구분선 바로 뒤 볼드 텍스트
+    container.querySelectorAll('.se-hr + .se-module-text, .se-section-horizontalLine + .se-section-text').forEach(function(el) {
+      var boldEl = el.querySelector('strong, b');
+      if (boldEl) {
+        addSubheading(boldEl.textContent.trim(), 'separator-heading');
+      }
+    });
+    // 4. 문단 전체가 볼드인 경우만 (볼드 비율 90% 이상)
+    container.querySelectorAll('.se-module-text').forEach(function(el) {
+      var boldEl = el.querySelector('strong, b');
+      if (boldEl) {
+        var t = boldEl.textContent.trim();
+        var pt = el.textContent.trim();
+        if (t.length >= 5 && t.length <= 50 && pt.startsWith(t) && (t.length / pt.length) > 0.9) {
+          addSubheading(t, 'bold-heading');
+        }
+      }
+    });
+    // 5. 큰 글씨 소제목 (se-fs-fs26 이상 - 명시적 스타일이므로 문장 필터 안 함)
+    container.querySelectorAll('[class*="se-fs-"]').forEach(function(el) {
+      var cls = el.className || '';
+      var match = cls.match(/se-fs-fs(\d+)/);
+      if (match && parseInt(match[1]) >= 26) {
+        addSubheading(el.textContent.trim(), 'large-text', true);
+      }
+    });
+    // 6. 인라인 스타일 큰 폰트 (font-size >= 24px - 명시적 스타일이므로 문장 필터 안 함)
+    container.querySelectorAll('[style*="font-size"]').forEach(function(el) {
+      var style = el.getAttribute('style') || '';
+      var match = style.match(/font-size\s*:\s*(\d+)/);
+      if (match && parseInt(match[1]) >= 24) {
+        addSubheading(el.textContent.trim(), 'large-text', true);
+      }
+    });
+
+    // 7. DOM에서 소제목을 못 찾으면 텍스트 기반 감지
+    if (subheadings.length === 0 && fullText.length > 200) {
+      var ftLines = fullText.split(/\n/).filter(function(l) { return l.trim().length > 0; });
+      // fullText가 줄바꿈 없이 한 줄이면 문단 텍스트에서 감지
+      var detectLines = ftLines.length > 3 ? ftLines : paragraphs.map(function(p) {
+        return typeof p === 'string' ? p : (p.text || '');
+      }).filter(function(t) { return t.length > 0; });
+
+      for (var dli = 0; dli < detectLines.length; dli++) {
+        var dl = detectLines[dli].trim();
+        if (dl.length >= 3 && dl.length <= 45 &&
+            !/[.!?。]$/.test(dl) &&
+            !/^\[이미지|^\[사진|^\[image/i.test(dl)) {
+          var hasPrevLine = dli > 0 && detectLines[dli - 1].trim().length > 30;
+          var hasNextLine = dli < detectLines.length - 1 && detectLines[dli + 1].trim().length > 30;
+          if (hasPrevLine || hasNextLine) {
+            addSubheading(dl, 'text-detected', true);
+          }
+        }
+      }
+    }
 
     return {
       title: title,
@@ -653,7 +757,7 @@ document.addEventListener('DOMContentLoaded', function() {
           var analysisTimeout = setTimeout(function() {
             if (analysisHandled) return;
             analysisHandled = true;
-            console.log('[Panel] analyzeData 타임아웃 - 기본 분석 사용');
+            console.log('[Panel] analyzeData 타임아웃 (5초) - 기본 분석 사용');
             var analysis = buildBasicAnalysis(bestExtracted);
             currentData = { extracted: bestExtracted, analysis: analysis };
             try { updateUI(currentData); } catch(e) { console.error('[Panel] UI 업데이트 오류:', e); }
@@ -662,7 +766,7 @@ document.addEventListener('DOMContentLoaded', function() {
               LearningEngine.learn(currentData).then(function() { updateLearningStatus(); });
             }
             showLoading(false);
-          }, 3000);
+          }, 5000);
 
           chrome.tabs.sendMessage(tab.id, {
             action: 'analyzeData',
@@ -704,12 +808,64 @@ document.addEventListener('DOMContentLoaded', function() {
    */
   function buildBasicAnalysis(extracted) {
     var text = extracted.fullText || '';
-    var totalLen = text.length || 1;
     var paragraphs = extracted.paragraphs || [];
-    var pCount = paragraphs.length || 1;
     var subheadings = extracted.subheadings || [];
     var images = extracted.images || [];
     var tags = extracted.tags || [];
+
+    // ── 제목이 본문 텍스트에 포함된 경우 제거 ──
+    // 주의: fullText가 줄바꿈 없이 한 줄일 수 있으므로 길이 가드 필수
+    if (extracted.title && extracted.title.length >= 3) {
+      var _titleNorm = extracted.title.replace(/\s+/g, '').toLowerCase();
+      var _lines = text.split('\n');
+      for (var _i = 0; _i < Math.min(3, _lines.length); _i++) {
+        var _lineNorm = _lines[_i].trim().replace(/\s+/g, '').toLowerCase();
+        // 줄 길이가 제목의 3배 이내일 때만 제목 줄로 판정 (긴 본문 전체 삭제 방지)
+        if (_lineNorm.length > 0 && _lineNorm.length < _titleNorm.length * 3 && (
+            _lineNorm === _titleNorm ||
+            (_lineNorm.length > 5 && _titleNorm.indexOf(_lineNorm) >= 0) ||
+            (_titleNorm.length > 5 && _lineNorm.indexOf(_titleNorm) >= 0))) {
+          _lines.splice(_i, 1);
+          break;
+        }
+      }
+      text = _lines.join('\n').trim();
+    }
+
+    // ── paragraphs 에서도 제목 문단 제거 ──
+    if (extracted.title && paragraphs.length > 0) {
+      var _fpText = typeof paragraphs[0] === 'string' ? paragraphs[0] : (paragraphs[0].text || '');
+      var _tNorm = extracted.title.replace(/\s+/g, '').toLowerCase();
+      var _pNorm = _fpText.trim().replace(/\s+/g, '').toLowerCase();
+      if (_pNorm.length > 0 && _pNorm.length < _tNorm.length * 3 && (
+          _pNorm === _tNorm ||
+          (_pNorm.length > 5 && _tNorm.indexOf(_pNorm) >= 0) ||
+          (_tNorm.length > 5 && _pNorm.indexOf(_tNorm) >= 0))) {
+        paragraphs = paragraphs.slice(1);
+      }
+    }
+
+    // ── 소제목이 없으면 텍스트 기반으로 감지 ──
+    if (subheadings.length === 0 && text.length > 200) {
+      var _textLines = text.split('\n').filter(function(l) { return l.trim().length > 0; });
+      for (var _li = 0; _li < _textLines.length; _li++) {
+        var _line = _textLines[_li].trim();
+        // 3~45자, 마침표·물음표·느낌표 없음, 이미지 태그 아님
+        if (_line.length >= 3 && _line.length <= 45 &&
+            !/[.!?。]$/.test(_line) &&
+            !/^\[이미지|^\[사진|^\[image/i.test(_line)) {
+          // 앞이나 뒤에 긴 텍스트가 있으면 소제목으로 간주
+          var _hasPrev = _li > 0 && _textLines[_li - 1].trim().length > 30;
+          var _hasNext = _li < _textLines.length - 1 && _textLines[_li + 1].trim().length > 30;
+          if (_hasPrev || _hasNext) {
+            subheadings.push(_line);
+          }
+        }
+      }
+    }
+
+    var totalLen = text.length || 1;
+    var pCount = paragraphs.length || 1;
 
     // 서론/본론/결론 문단 분류
     var introEnd = Math.max(1, Math.floor(pCount * 0.15));
@@ -727,16 +883,20 @@ document.addEventListener('DOMContentLoaded', function() {
     var bodyCharCount = bodyParagraphs.reduce(function(sum, p) { return sum + (p.length || (p.text || '').length); }, 0);
     var conclusionCharCount = conclusionParagraphs.reduce(function(sum, p) { return sum + (p.length || (p.text || '').length); }, 0);
 
-    // 문장 분리
-    var sentences = text.split(/[.!?。]+/).filter(function(s) { return s.trim().length > 5; });
-    var avgSentenceLength = sentences.length > 0 ? Math.round(totalLen / sentences.length) : 0;
+    // 문장 분리 (구분자를 유지하여 문장 유형 판별)
+    var sentencesRaw = text.match(/[^.!?。]+[.!?。]+/g) || [];
+    var sentences = sentencesRaw.filter(function(s) { return s.trim().length > 5; });
+    var avgSentenceLength = sentences.length > 0
+      ? Math.round(sentences.reduce(function(sum, s) { return sum + s.trim().length; }, 0) / sentences.length)
+      : 0;
     var avgParagraphLength = Math.round(totalLen / pCount);
 
     // 문장 유형 분류
     var statements = 0, questions = 0, exclamations = 0;
     sentences.forEach(function(s) {
-      if (s.trim().endsWith('?')) questions++;
-      else if (s.trim().endsWith('!')) exclamations++;
+      var trimmed = s.trim();
+      if (trimmed.endsWith('?')) questions++;
+      else if (trimmed.endsWith('!')) exclamations++;
       else statements++;
     });
     var totalSentences = sentences.length || 1;
@@ -748,119 +908,256 @@ document.addEventListener('DOMContentLoaded', function() {
     });
     var imagePattern = images.length === 0 ? 'no_images' : 'scattered';
 
-    // 메인 키워드 추출 (제목 또는 태그에서)
+    // 메인 키워드 추출 (제목+본문 빈도+태그 교차 분석)
     var mainKeyword = '';
-    if (tags.length > 0) {
-      // 태그가 있으면 첫 번째 태그를 메인 키워드로
-      mainKeyword = tags[0];
-    } else if (extracted.title) {
-      // 제목에서 핵심 키워드 추출 (2~6자 단어 중 본문 빈도 높은 것)
-      var titleWords = extracted.title.replace(/[^\uAC00-\uD7A3a-zA-Z0-9\s]/g, '').split(/\s+/).filter(function(w) { return w.length >= 2 && w.length <= 8; });
-      var bestWord = '';
-      var bestCount = 0;
-      titleWords.forEach(function(w) {
-        try {
-          var count = (text.match(new RegExp(w, 'gi')) || []).length;
-          if (count > bestCount) { bestCount = count; bestWord = w; }
-        } catch(e) {}
-      });
-      mainKeyword = bestWord || (titleWords.length > 0 ? titleWords[0] : extracted.title.substring(0, 10));
-    }
+    (function() {
+      var title = extracted.title || '';
+      // 제목에서 2글자 이상 한글 단어 추출
+      var titleWords = title.match(/[가-힣a-zA-Z0-9]{2,}/g) || [];
+      // 본문에서 모든 2글자 이상 단어 빈도 계산
+      var bodyWords = text.match(/[가-힣a-zA-Z0-9]{2,}/g) || [];
+      var bodyFreq = {};
+      bodyWords.forEach(function(w) { bodyFreq[w] = (bodyFreq[w] || 0) + 1; });
 
-    // 서브 키워드 추출 (본문 빈도 기반 2~6자 명사/키워드)
-    var subKeywords = [];
-    try {
-      var wordFreq = {};
-      var words = text.replace(/[^\uAC00-\uD7A3a-zA-Z0-9\s]/g, '').split(/\s+/);
-      words.forEach(function(w) {
-        if (w.length >= 2 && w.length <= 8) {
-          wordFreq[w] = (wordFreq[w] || 0) + 1;
+      // 태그 목록 (# 제거, 정리)
+      var cleanTags = tags.map(function(t) { return t.replace(/^#/, '').trim(); }).filter(function(t) { return t.length >= 2; });
+
+      // 후보 키워드 생성: 제목 단어 중 본문에서도 등장하는 것
+      var candidates = [];
+      titleWords.forEach(function(tw) {
+        var freq = bodyFreq[tw] || 0;
+        // 태그에도 포함되면 보너스
+        var tagBonus = cleanTags.some(function(tag) { return tag.indexOf(tw) >= 0 || tw.indexOf(tag) >= 0; }) ? 10 : 0;
+        // 제목에서 복합 키워드 확인 (연속된 단어 조합)
+        var isCompound = title.indexOf(tw) >= 0 && tw.length >= 4;
+        var compoundBonus = isCompound ? 5 : 0;
+        candidates.push({ word: tw, score: freq + tagBonus + compoundBonus + tw.length });
+      });
+
+      // 태그도 후보에 추가 (제목에 포함된 태그 우선)
+      cleanTags.forEach(function(tag) {
+        if (tag.length >= 2) {
+          var inTitle = title.indexOf(tag) >= 0;
+          var freq = bodyFreq[tag] || 0;
+          if (inTitle) {
+            candidates.push({ word: tag, score: freq + 20 + tag.length }); // 제목+태그 = 최우선
+          } else {
+            candidates.push({ word: tag, score: freq + tag.length });
+          }
         }
       });
-      // 불용어 제거
-      var stopWords = ['그리고', '하지만', '그래서', '때문에', '그런데', '이것은', '저것은', '이렇게', '그렇게', '합니다', '있습니다', '없습니다', '것입니다', '됩니다', '입니다'];
-      var sortedWords = Object.keys(wordFreq)
-        .filter(function(w) { return wordFreq[w] >= 2 && stopWords.indexOf(w) === -1 && w !== mainKeyword; })
-        .sort(function(a, b) { return wordFreq[b] - wordFreq[a]; });
-      subKeywords = sortedWords.slice(0, 10);
-      // 태그에서 추가 (중복 제거)
-      tags.forEach(function(tag) {
-        if (tag !== mainKeyword && subKeywords.indexOf(tag) === -1 && subKeywords.length < 10) {
-          subKeywords.push(tag);
+
+      // 불용어 필터
+      var kwStopwords = ['있는', '하는', '되는', '그리고', '하지만', '그래서', '그런데', '그러나',
+        '또한', '이런', '저런', '이것', '저것', '때문', '정말', '진짜', '너무', '매우',
+        '아주', '가장', '더욱', '오늘', '내일', '어제', '결국', '이렇게', '블로그'];
+      candidates = candidates.filter(function(c) { return kwStopwords.indexOf(c.word) === -1; });
+
+      // 점수 순 정렬
+      candidates.sort(function(a, b) { return b.score - a.score; });
+
+      // 중복 제거 후 최고 점수 후보 선택
+      var seen = {};
+      for (var i = 0; i < candidates.length; i++) {
+        if (!seen[candidates[i].word]) {
+          mainKeyword = candidates[i].word;
+          break;
         }
-      });
-    } catch(e) {}
+        seen[candidates[i].word] = true;
+      }
+
+      // 후보가 없으면 제목에서 가장 긴 단어
+      if (!mainKeyword && titleWords.length > 0) {
+        mainKeyword = titleWords.sort(function(a,b) { return b.length - a.length; })[0] || '';
+      }
+    })();
+
+    // 키워드 위치맵
+    function escapeRegExp(str) { return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+    var positionMap = { title: false, firstParagraph: false, subheadings: false, middle: false, lastParagraph: false, tags: false };
+    if (mainKeyword) {
+      try {
+        var kwRegex = new RegExp(escapeRegExp(mainKeyword), 'i');
+        positionMap.title = kwRegex.test(extracted.title || '');
+        if (paragraphs.length > 0) {
+          var firstP = typeof paragraphs[0] === 'string' ? paragraphs[0] : (paragraphs[0].text || '');
+          positionMap.firstParagraph = kwRegex.test(firstP);
+          var lastP = typeof paragraphs[pCount-1] === 'string' ? paragraphs[pCount-1] : (paragraphs[pCount-1].text || '');
+          positionMap.lastParagraph = kwRegex.test(lastP);
+          // 중간 부분 체크
+          if (paragraphs.length > 2) {
+            var midStart = Math.floor(paragraphs.length * 0.3);
+            var midEnd = Math.floor(paragraphs.length * 0.7);
+            var midText = paragraphs.slice(midStart, midEnd).map(function(p) {
+              return typeof p === 'string' ? p : (p.text || '');
+            }).join(' ');
+            positionMap.middle = kwRegex.test(midText);
+          }
+        }
+        // 소제목 체크
+        if (subheadings.length > 0) {
+          positionMap.subheadings = subheadings.some(function(sh) {
+            var shText = typeof sh === 'string' ? sh : (sh.text || '');
+            return kwRegex.test(shText);
+          });
+        }
+        positionMap.tags = tags.some(function(t) { return kwRegex.test(t); });
+      } catch(e) {}
+    }
 
     // 키워드 밀도
     var density = 0;
     if (mainKeyword && text.length > 0) {
       try {
-        var kwCount = (text.match(new RegExp(mainKeyword, 'gi')) || []).length;
+        var kwCount = (text.match(new RegExp(escapeRegExp(mainKeyword), 'gi')) || []).length;
         var totalWords = text.split(/\s+/).length;
         density = totalWords > 0 ? parseFloat(((kwCount / totalWords) * 100).toFixed(2)) : 0;
       } catch(e) {}
     }
 
-    // 키워드 위치맵
-    var positionMap = {
-      title: mainKeyword ? new RegExp(mainKeyword, 'i').test(extracted.title || '') : false,
-      firstParagraph: false,
-      subheadings: false,
-      middle: false,
-      lastParagraph: false,
-      tags: false
-    };
-    if (mainKeyword && paragraphs.length > 0) {
+    // SEO 점수 - NaverSEOAnalyzer v2.0 호환 (7개 항목, 100점 만점)
+    var seoScore = 0;
+    var seoFactors = [];
+
+    // 1. 첫 문단 품질 (20점)
+    var fpScore = 15;
+    var fpStatus = 'good';
+    var fpHint = '';
+    if (paragraphs.length > 0) {
+      var fp = typeof paragraphs[0] === 'string' ? paragraphs[0] : (paragraphs[0].text || '');
+
+      // 제목 복붙 체크 (제목 제거 후에도 남아 있을 수 있으므로 방어적 체크)
+      if (extracted.title && fp.length > 0) {
+        var _fpTitleNorm = extracted.title.replace(/\s+/g, '').toLowerCase();
+        var _fpFirstLine = fp.split('\n')[0].trim().replace(/\s+/g, '').toLowerCase();
+        // 첫 줄 길이가 제목의 3배 이내일 때만 복붙 판정 (긴 문단 오판 방지)
+        if (_fpFirstLine.length > 3 && _fpFirstLine.length < _fpTitleNorm.length * 3 && (
+            _fpFirstLine === _fpTitleNorm ||
+            (_fpFirstLine.length > 5 && _fpTitleNorm.indexOf(_fpFirstLine) >= 0) ||
+            (_fpTitleNorm.length > 5 && _fpFirstLine.indexOf(_fpTitleNorm) >= 0))) {
+          fpScore = 5; fpStatus = 'bad'; fpHint = '제목 복붙';
+        }
+      }
+
+      // 인사말 시작 감점
+      var badStarts = ['안녕하세요', '오늘은', '여러분', '안녕', '반갑습니다'];
+      if (fpStatus !== 'bad' && badStarts.some(function(s) { return fp.trim().startsWith(s); })) {
+        fpScore = 7; fpStatus = 'bad'; fpHint = '인사말 시작';
+      }
+
+      // 구체적 정보(숫자) 포함 보너스
+      if (/\d+[개대평명원시간분%년월일만억천건회]|[\d,]+만?\s*원/.test(fp)) {
+        fpScore = Math.min(20, fpScore + 5);
+      }
+
+      // 핵심정보 부족 체크 (50자 미만)
+      if (fp.trim().length < 50 && fpStatus !== 'bad') {
+        fpScore = Math.max(5, fpScore - 5); fpHint = (fpHint ? fpHint + ', ' : '') + '핵심정보 부족';
+      }
+    } else {
+      fpScore = 0; fpStatus = 'bad'; fpHint = '본문 없음';
+    }
+    seoScore += fpScore;
+    seoFactors.push({ factor: '첫 문단 품질', score: fpScore, maxScore: 20, status: fpStatus, hint: fpHint });
+
+    // 2. 콘텐츠 구조 (20점)
+    var csScore = 0;
+    var csHint = '';
+    if (totalLen >= 2000) csScore += 8;
+    else if (totalLen >= 1500) csScore += 6;
+    else if (totalLen >= 800) csScore += 3;
+    else csHint = '글 길이 부족';
+    if (subheadings.length >= 3) csScore += 8;
+    else if (subheadings.length >= 2) csScore += 6;
+    else if (subheadings.length >= 1) csScore += 3;
+    else csHint += (csHint ? ', ' : '') + '소제목 추가 권장';
+    if (pCount >= 5) csScore += 4;
+    else if (pCount >= 3) csScore += 2;
+    csScore = Math.min(20, csScore);
+    var csStatus = csScore >= 15 ? 'good' : csScore >= 8 ? 'warn' : 'bad';
+    seoScore += csScore;
+    seoFactors.push({ factor: '콘텐츠 구조', score: csScore, maxScore: 20, status: csStatus, hint: csHint });
+
+    // 3. FIRE 공식 (20점)
+    var fireScore = 0;
+    var fireElements = [];
+    if (/\d+[개대평명원시간분%년월일만억천건회]|[\d,]+만?\s*원|[\d.]+km/.test(text)) { fireScore += 5; fireElements.push('F'); }
+    if (/때문|이유|원인|덕분|효과|덕분에|그래서/.test(text)) { fireScore += 5; fireElements.push('I'); }
+    if (/직접|실제로|써보니|다녀와|먹어보니|사용해|체험|경험/.test(text)) { fireScore += 5; fireElements.push('R'); }
+    if (/느낌|만족|추천|좋았|별로|후기|아쉬|편했|최고|결심|깨달|솔직히|확실|강추|놓치지|대박|신세계|후회|뿌듯|다행/.test(text)) { fireScore += 5; fireElements.push('E'); }
+    var fireStatus = fireScore >= 15 ? 'good' : fireScore >= 10 ? 'warn' : 'bad';
+    var fireHint = fireElements.length === 4 ? 'FIRE 완벽 적용' :
+      fireElements.length > 0 ? fireElements.join('+') + ' (' + ['F','I','R','E'].filter(function(e) { return fireElements.indexOf(e) < 0; }).join('') + ' 부족)' : '구체적 경험 추가 필요';
+    seoScore += fireScore;
+    seoFactors.push({ factor: 'FIRE 공식', score: fireScore, maxScore: 20, status: fireStatus, hint: fireHint });
+
+    // 4. 제목 최적화 (15점)
+    var ttScore = 0;
+    var ttHint = '';
+    var hasKwInTitle = mainKeyword && positionMap.title;
+    var hasNumberInTitle = /\d+[개대평명원시간분%년월일가지곳선만억천건회]|[\d,]+만?\s*원/.test(extracted.title || '');
+    if (hasKwInTitle && hasNumberInTitle) { ttScore = 15; ttHint = '키워드+수치 포함'; }
+    else if (hasKwInTitle) { ttScore = 10; ttHint = '수치 추가 권장'; }
+    else if ((extracted.title || '').length >= 10) { ttScore = 5; ttHint = '키워드 포함 권장'; }
+    else if ((extracted.title || '').length > 0) { ttScore = 3; ttHint = '제목 최적화 필요'; }
+    else { ttScore = 0; ttHint = '제목 없음'; }
+    var ttStatus = ttScore >= 12 ? 'good' : ttScore >= 7 ? 'warn' : 'bad';
+    seoScore += ttScore;
+    seoFactors.push({ factor: '제목 최적화', score: ttScore, maxScore: 15, status: ttStatus, hint: ttHint });
+
+    // 5. 이미지 활용 (10점)
+    var imgScore = 0;
+    var imgHint = '';
+    if (images.length >= 5) { imgScore = 10; }
+    else if (images.length >= 3) { imgScore = 8; }
+    else if (images.length > 0) { imgScore = 4; imgHint = '이미지 3장 이상 권장'; }
+    else { imgScore = 0; imgHint = '이미지 없음'; }
+    var imgStatus = imgScore >= 8 ? 'good' : imgScore >= 4 ? 'warn' : 'bad';
+    seoScore += imgScore;
+    seoFactors.push({ factor: '이미지 활용', score: imgScore, maxScore: 10, status: imgStatus, hint: imgHint });
+
+    // 6. 신뢰성 요소 (10점)
+    var crScore = 0;
+    var crElements = [];
+    if (/https?:\/\/|출처|참고|참조/.test(text)) { crScore += 3; crElements.push('출처'); }
+    if (/\d+년\s*(경력|운영)|평점|별점|\d+평|\d+㎡/.test(text)) { crScore += 3; crElements.push('데이터'); }
+    if (/자격증|수료증|전문가|인증|경력|트레이너|코치|강사|대표/.test(text)) { crScore += 3; crElements.push('자격'); }
+    if (/주소|위치|영업시간|가격|[\d,]+원/.test(text)) { crScore += 1; crElements.push('정보'); }
+    crScore = Math.min(10, crScore);
+    var crStatus = crScore >= 7 ? 'good' : crScore >= 4 ? 'warn' : 'bad';
+    var crHint = crElements.length > 0 ? crElements.join('+') : '신뢰성 요소 부족';
+    seoScore += crScore;
+    seoFactors.push({ factor: '신뢰성 요소', score: crScore, maxScore: 10, status: crStatus, hint: crHint });
+
+    // 7. 태그 (5점)
+    var tgScore = 0;
+    var tgHint = '';
+    if (tags.length >= 5) { tgScore = 5; }
+    else if (tags.length >= 3) { tgScore = 3; tgHint = '태그 5개 이상 권장'; }
+    else if (tags.length > 0) { tgScore = 1; tgHint = '태그 추가 필요'; }
+    else { tgScore = 0; tgHint = '태그 없음'; }
+    var tgStatus = tgScore >= 4 ? 'good' : tgScore >= 2 ? 'warn' : 'bad';
+    seoScore += tgScore;
+    seoFactors.push({ factor: '태그', score: tgScore, maxScore: 5, status: tgStatus, hint: tgHint });
+
+    // 8. 감점 요소 (NaverSEOAnalyzer v2.0 호환)
+    var penaltyScore = 0;
+    var penaltyHints = [];
+    if (mainKeyword) {
       try {
-        var kwRegex = new RegExp(mainKeyword, 'i');
-        var firstP = typeof paragraphs[0] === 'string' ? paragraphs[0] : (paragraphs[0].text || '');
-        positionMap.firstParagraph = kwRegex.test(firstP);
-        var lastP = typeof paragraphs[pCount-1] === 'string' ? paragraphs[pCount-1] : (paragraphs[pCount-1].text || '');
-        positionMap.lastParagraph = kwRegex.test(lastP);
-        positionMap.tags = tags.some(function(t) { return kwRegex.test(t); });
+        var kwRepeatCount = (text.match(new RegExp(escapeRegExp(mainKeyword), 'gi')) || []).length;
+        if (kwRepeatCount >= 15) { penaltyScore -= 5; penaltyHints.push('키워드 과다 반복(' + kwRepeatCount + '회)'); }
       } catch(e) {}
     }
-
-    // SEO 점수 - NaverSEOAnalyzer v2.0 사용
-    var seoScore = 0;
-    var seoGrade = 'F';
-    var seoFactors = [];
-    var seoDetails = [];
-    var seoGradeDescription = '';
-
-    if (typeof NaverSEOAnalyzer !== 'undefined') {
-      var seoResult = NaverSEOAnalyzer.analyze({
-        title: extracted.title || '',
-        content: text,
-        keyword: mainKeyword,
-        imageCount: images.length,
-        subheadingCount: subheadings.length,
-        tagCount: tags.length,
-        tags: tags
-      });
-      seoScore = seoResult.score;
-      seoGrade = seoResult.grade;
-      seoGradeDescription = seoResult.gradeDescription || '';
-      seoDetails = seoResult.details || [];
-      // 호환용 factors 변환
-      seoFactors = seoDetails.map(function(d) {
-        return {
-          factor: d.item,
-          score: d.score,
-          maxScore: d.max,
-          status: d.status === 'good' ? 'good' : d.status === 'warn' ? 'warning' : 'bad',
-          hint: d.hint
-        };
-      });
-    } else {
-      // 폴백: 기본 점수
-      if (positionMap.title) { seoScore += 15; }
-      if (totalLen >= 1500) { seoScore += 15; }
-      if (images.length >= 3) { seoScore += 10; }
-      if (subheadings.length >= 2) { seoScore += 10; }
-      if (tags.length >= 5) { seoScore += 5; }
-      seoGrade = seoScore >= 95 ? 'S' : seoScore >= 85 ? 'A' : seoScore >= 70 ? 'B' : seoScore >= 55 ? 'C' : seoScore >= 40 ? 'D' : 'F';
+    var uncertainPatterns = text.match(/것 같|아마|어쩌면|글쎄|잘 모르|~인 듯|~일 수도/g) || [];
+    if (uncertainPatterns.length >= 5) { penaltyScore -= 3; penaltyHints.push('불확실한 표현 반복(' + uncertainPatterns.length + '회)'); }
+    if (penaltyScore < 0) {
+      seoScore += penaltyScore;
+      seoFactors.push({ factor: '감점 요소', score: penaltyScore, maxScore: 0, status: 'bad', hint: penaltyHints.join(', ') });
     }
+
+    seoScore = Math.max(0, Math.min(100, seoScore));
+    var seoGrade = seoScore >= 95 ? 'S' : seoScore >= 85 ? 'A' : seoScore >= 70 ? 'B' : seoScore >= 55 ? 'C' : seoScore >= 40 ? 'D' : 'F';
 
     // 첫 문장 후킹 유형
     var firstSentence = sentences[0] || '';
@@ -868,6 +1165,83 @@ document.addEventListener('DOMContentLoaded', function() {
     if (firstSentence.includes('?')) hookType = 'question';
     else if (firstSentence.includes('!')) hookType = 'exclamation';
     else if (firstSentence.includes('안녕') || firstSentence.includes('반갑')) hookType = 'greeting';
+    else if (/\d+/.test(firstSentence)) hookType = 'statistic';
+    else if (firstSentence.length > 50) hookType = 'storytelling';
+
+    // 문체 감지 (문장 끝 어미 기준)
+    var styleCounts = { formal: 0, casual: 0, informal: 0 };
+    var styleSentences = text.split(/[.!?。]+/).filter(function(s) { return s.trim().length > 3; });
+    styleSentences.forEach(function(sentence) {
+      var trimmed = sentence.trim();
+      if (!trimmed) return;
+      var ending = trimmed.slice(-10);
+      if (/니다$|니까$/.test(ending)) {
+        styleCounts.formal += 2;
+      } else if (/요$|죠$/.test(ending)) {
+        styleCounts.casual += 2;
+      } else if (/(?:해$|야$|어$|아$|지$|네$|군$|구$|는다$|ㄴ다$|란다$|했어$|했지$|같아$|싶어$|할게$|갈게$|한다$|된다$|온다$|간다$)/.test(ending)) {
+        styleCounts.informal += 2;
+      }
+    });
+    var detectedStyle = Object.entries(styleCounts).sort(function(a, b) { return b[1] - a[1]; })[0];
+    var writingStyle = (detectedStyle && detectedStyle[1] > 0) ? detectedStyle[0] : 'casual';
+
+    // 이모지 분석
+    var emojiRegex = /[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu;
+    var emojisFound = text.match(emojiRegex) || [];
+    var uniqueEmojis = [];
+    emojisFound.forEach(function(e) { if (uniqueEmojis.indexOf(e) === -1) uniqueEmojis.push(e); });
+
+    // 서브 키워드 추출
+    var textWords = text.match(/[가-힣]{2,}/g) || [];
+    var stopwords = [
+      // 동사/형용사 어미
+      '있는', '하는', '되는', '없는', '같은', '다른', '많은', '좋은', '큰', '작은',
+      '있습니다', '합니다', '됩니다', '없습니다', '같습니다', '봅니다', '줍니다',
+      '있어요', '해요', '돼요', '없어요', '같아요', '봐요', '줘요',
+      '있어', '해서', '돼서', '없어', '같아', '봐서',
+      '했습니다', '됐습니다', '았습니다', '었습니다',
+      '아닙니다', '입니다', '습니다',
+      // 접속사/부사
+      '그리고', '하지만', '그래서', '그런데', '그러나', '또한', '그래도', '그러면',
+      '그렇게', '그러니', '그러므로', '따라서', '때문에', '그리하여', '그렇지만',
+      '그럼', '근데', '그땐', '그때', '이때', '지금', '나중',
+      // 대명사/지시어
+      '이런', '저런', '그런', '이것', '저것', '그것', '여기', '거기', '저기',
+      '이거', '저거', '그거', '이게', '저게', '그게', '이건', '저건', '그건',
+      '이렇게', '저렇게', '그렇게', '이래서', '그래서',
+      // 일반 부사/관형사
+      '정말', '진짜', '너무', '매우', '아주', '가장', '더욱', '꽤나', '참',
+      '완전', '엄청', '되게', '좀', '약간', '조금', '살짝', '꽤',
+      // 시간 관련
+      '오늘', '내일', '어제', '지금', '나중', '최근', '요즘', '올해', '작년',
+      // 일반 명사 (의미 없는)
+      '때문', '무엇', '어떤', '모든', '것이', '수가', '것은', '것을', '것도',
+      '정도', '이상', '이하', '이후', '이전', '부분', '경우', '사실', '방법',
+      // 조사 붙은 대명사/일반어
+      '글을', '글이', '글은', '글의', '말을', '말이', '말은',
+      '분이', '분들', '분의', '분은', '분을',
+      '걸로', '거로', '으로', '에서', '에게', '부터', '까지', '에는',
+      // 동사 기본형
+      '하다', '되다', '있다', '없다', '보다', '주다', '가다', '오다', '알다', '모르다',
+      '같다', '싶다', '받다', '만들다', '쓰다', '먹다',
+      // 보조용언
+      '하게', '하면', '하고', '해도', '해야', '해서', '하니', '하는데',
+      '되면', '되고', '되어', '돼서', '되니', '되는데'
+    ];
+    var wordFreq = {};
+    textWords.forEach(function(w) {
+      if (stopwords.indexOf(w) === -1 && w.length >= 2) {
+        // 추가 필터: 2글자이며 조사/어미로 끝나는 패턴 제거
+        if (w.length === 2 && /[을를은는이가의에도로서와과만]$/.test(w)) return;
+        wordFreq[w] = (wordFreq[w] || 0) + 1;
+      }
+    });
+    var sortedWords = Object.entries(wordFreq)
+      .sort(function(a, b) { return b[1] - a[1]; })
+      .map(function(entry) { return entry[0]; })
+      .filter(function(w) { return w !== mainKeyword; });
+    var subKeywords = sortedWords.slice(0, 10);
 
     return {
       structure: {
@@ -910,20 +1284,18 @@ document.addEventListener('DOMContentLoaded', function() {
           question: Math.round((questions / totalSentences) * 100),
           exclamation: Math.round((exclamations / totalSentences) * 100)
         },
-        writingStyle: 'casual',
+        writingStyle: writingStyle,
         tone: avgSentenceLength < 30 ? 'concise' : avgSentenceLength > 60 ? 'detailed' : 'balanced',
         hookType: hookType,
         avgSentenceLength: avgSentenceLength,
-        emoji: { count: 0, unique: [] }
+        emoji: { count: emojisFound.length, unique: uniqueEmojis }
       },
       seo: {
         score: seoScore,
         maxScore: 100,
         percentage: seoScore,
         grade: seoGrade,
-        gradeDescription: seoGradeDescription,
-        factors: seoFactors,
-        details: seoDetails
+        factors: seoFactors
       }
     };
   }
@@ -989,34 +1361,48 @@ document.addEventListener('DOMContentLoaded', function() {
   }
 
   /**
-   * SEO 상세 정보 업데이트 (NaverSEOAnalyzer v2.0)
+   * SEO 상세 정보 업데이트
    */
   function updateSeoDetail(seo) {
-    var details = seo.details || [];
+    var container = document.getElementById('seoFactors');
+    if (!container) return;
 
-    // NaverSEOAnalyzer v2.0 details 배열 순서대로 업데이트
-    details.forEach(function(d, index) {
-      var iconEl = document.getElementById('factorIcon' + index);
-      var scoreEl = document.getElementById('factorScore' + index);
-      var factorEl = scoreEl ? scoreEl.closest('.seo-factor') : null;
+    // NaverSEOAnalyzer: factors 또는 details 배열 지원
+    var factors = seo.factors || seo.details || [];
 
-      if (iconEl) {
-        if (d.status === 'good') iconEl.textContent = '✅';
-        else if (d.status === 'warn') iconEl.textContent = '⚠️';
-        else if (d.status === 'bad') iconEl.textContent = '❌';
-        else iconEl.textContent = '-';
-      }
-      if (scoreEl) {
-        var scoreDisplay = d.score < 0 ? d.score : d.score + '/' + d.max;
-        scoreEl.textContent = scoreDisplay;
-      }
-      if (factorEl) {
-        var statusClass = d.status === 'warn' ? 'warning' : d.status;
-        factorEl.className = 'seo-factor ' + statusClass;
-        // 힌트가 있으면 title로 표시
-        if (d.hint) factorEl.title = d.hint;
-      }
-    });
+    // 항목별 기준 설명
+    var criteriaMap = {
+      '첫 문단 품질': '인사말 없이 핵심 정보를 바로 제시하는지 평가',
+      '콘텐츠 구조': '목차와 소제목(3개+)으로 체계적으로 구성했는지 평가',
+      'FIRE 공식': 'Fact(사실) + Interpretation(해석) + Real(실경험) + Experience(느낌)',
+      '제목 최적화': '메인 키워드 포함 + 구체적 수치 + 키워드 앞배치',
+      '이미지 활용': '5장 이상 이미지로 시각적 정보를 제공하는지 평가',
+      '신뢰성 요소': '출처 링크, 구체적 데이터, 자격/경력 등 신뢰 근거',
+      '태그': '5개 이상 태그 + 메인 키워드 태그 포함 여부',
+      '감점 요소': '키워드 과다 반복(15회+), 불확실한 표현 반복 감점'
+    };
+
+    container.innerHTML = factors.map(function(f) {
+      var name = f.factor || f.item || '';
+      var score = f.score || 0;
+      var max = f.maxScore || f.max || 0;
+      var status = f.status || 'bad';
+      if (status === 'warn') status = 'warning';
+
+      var icon = status === 'good' ? '✅' : (status === 'warning' ? '⚠️' : '❌');
+      var scoreDisplay = score < 0 ? String(score) : (score + '/' + max);
+      var criteria = criteriaMap[name] || '';
+      var criteriaHtml = criteria ? '<div class="factor-criteria">' + criteria + '</div>' : '';
+      var hintHtml = f.hint ? '<div class="factor-hint">' + f.hint + '</div>' : '';
+
+      return '<div class="seo-factor ' + status + '">' +
+        '<span class="factor-icon">' + icon + '</span>' +
+        '<span class="factor-name">' + name + '</span>' +
+        '<span class="factor-score">' + scoreDisplay + '</span>' +
+        criteriaHtml +
+        hintHtml +
+        '</div>';
+    }).join('');
   }
 
   /**
@@ -1211,7 +1597,7 @@ document.addEventListener('DOMContentLoaded', function() {
       // 수평선 제거
       .replace(/^---+$/gm, '')
       .replace(/^\*\*\*+$/gm, '')
-      // 리스트 마커 정리: - item -> item (단, [이미지: ]는 유지)
+      // 리스트 마커 정리: - item -> item (단, [이미지 는 유지)
       .replace(/^[\-\*]\s+(?!\[이미지)/gm, '')
       // 번호 리스트: 1. item -> item
       .replace(/^\d+\.\s+/gm, '');
@@ -1307,21 +1693,18 @@ document.addEventListener('DOMContentLoaded', function() {
           creativityLevel: creativityLevel,
           lengthRatio: lengthRatio,
           customRequest: customRequest,
-          learnedInsights: learnedInsights,
-          originalText: currentData.extracted ? currentData.extracted.fullText : '',
-          originalTitle: currentData.extracted ? currentData.extracted.title : '',
-          originalSubheadings: currentData.extracted ? currentData.extracted.subheadings : []
+          learnedInsights: learnedInsights
         });
 
       // 서비스 워커에서 API 키를 관리하므로 직접 요청
       chrome.runtime.sendMessage({
         action: 'generateContent',
-        prompt: prompt
+        prompt: prompt,
+        maxTokens: 65536
       }, function(response) {
         if (chrome.runtime.lastError) {
           alert('글 생성 중 오류가 발생했습니다.');
           showLoading(false);
-          startCooldown(generateBtn, 30);
           return;
         }
 
@@ -1337,10 +1720,16 @@ document.addEventListener('DOMContentLoaded', function() {
           // 결과 표시 (대체된 텍스트 사용)
           displayResult(bannedResult);
         } else {
-          alert(response ? response.error : '글 생성에 실패했습니다.');
+          var errorMsg = (response && response.error) ? response.error : '글 생성에 실패했습니다.';
+          // 영문 원본 에러 메시지가 노출되지 않도록 변환
+          if (errorMsg.toLowerCase().indexOf('quota') !== -1 || errorMsg.indexOf('429') !== -1 || errorMsg.toLowerCase().indexOf('rate') !== -1) {
+            errorMsg = 'API 사용량이 일시적으로 초과되었습니다. 1~2분 후 다시 시도해주세요.';
+          } else if (errorMsg.toLowerCase().indexOf('exceeded') !== -1 || errorMsg.toLowerCase().indexOf('resource') !== -1) {
+            errorMsg = 'API 사용량이 일시적으로 초과되었습니다. 1~2분 후 다시 시도해주세요.';
+          }
+          alert(errorMsg);
         }
         showLoading(false);
-        startCooldown(generateBtn, 30);
       });
     }); // learningInsightsPromise.then 닫기
   }
@@ -1355,7 +1744,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
     if (titleMatch) {
       title = titleMatch[1].trim();
-      content = text.replace(/\[제목\]\s*.+?\n?/, '').trim();
+      // .+ (greedy)로 전체 제목 라인을 매칭하여 제거
+      content = text.replace(/\[제목\]\s*.+(?:\n|$)/, '').trim();
     }
 
     return { title: title, content: content };
@@ -1460,8 +1850,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
     if (!imageSection || !promptsList) return;
 
-    // [이미지: ...] 패턴 찾기
-    var imagePattern = /\[이미지[:\s]*([^\]]+)\]/g;
+    // [이미지 N: 설명] 또는 [이미지: 설명] 패턴 찾기
+    var imagePattern = /\[이미지\s*\d*\s*[:\s]\s*([^\]]+)\]/g;
     var matches = [];
     var match;
 
@@ -1509,8 +1899,6 @@ document.addEventListener('DOMContentLoaded', function() {
     var structure = analysis.structure;
     var keywords = analysis.keywords;
     var style = analysis.style;
-    var isReinterpret = options.creativityLevel === '재해석';
-    var isReference = options.creativityLevel === '참고용';
 
     var prompt = '당신은 네이버 블로그 SEO 전문가이자 콘텐츠 작성 전문가입니다.\n\n';
 
@@ -1528,7 +1916,7 @@ document.addEventListener('DOMContentLoaded', function() {
     prompt += '## 작성 지침 ##\n';
     prompt += '1. 반드시 첫 줄에 SEO 최적화된 제목을 [제목] 태그로 작성하세요.\n';
     prompt += '   예시: [제목] 가양동 헬스장 추천! 바디프로짐에서 3개월 운동 후기\n';
-    prompt += '2. 이미지가 들어갈 위치에는 [이미지: 설명] 형식으로 표시하세요.\n';
+    prompt += '2. 이미지가 들어갈 위치에는 [이미지 1: 설명], [이미지 2: 설명] 형식으로 순서대로 번호를 매겨 표시하세요.\n';
     prompt += '3. 소제목은 별도 줄에 작성하고 앞뒤로 빈 줄을 넣어 구분하세요.\n';
     prompt += '4. 강조가 필요하면 마크다운 대신 "따옴표"나 느낌표!를 사용하세요.\n';
     prompt += '5. 네이버 블로그에 바로 붙여넣기 할 수 있는 형태로 작성하세요.\n\n';
@@ -1556,69 +1944,46 @@ document.addEventListener('DOMContentLoaded', function() {
       prompt += '\n';
     }
 
-    // 원본 글 전문 (재해석/참고용일 때 필수)
-    if ((isReinterpret || isReference) && options.originalText) {
-      prompt += '## 원본 글 (반드시 이 글을 기반으로 재작성) ##\n\n';
-      if (options.originalTitle) {
-        prompt += '[원본 제목] ' + options.originalTitle + '\n\n';
-      }
-      // 원본 소제목 구조
-      if (options.originalSubheadings && options.originalSubheadings.length > 0) {
-        prompt += '[원본 소제목 구조]\n';
-        options.originalSubheadings.forEach(function(sh, idx) {
-          prompt += (idx + 1) + '. ' + sh.text + '\n';
-        });
-        prompt += '\n';
-      }
-      // 원본 본문 (너무 길면 잘라서 전달)
-      var originalText = options.originalText;
-      if (originalText.length > 8000) {
-        originalText = originalText.substring(0, 8000) + '\n...(이하 생략)';
-      }
-      prompt += '[원본 본문]\n' + originalText + '\n\n';
+    // 원본 구조 데이터
+    var originalImageCount = structure.imagePositions ? structure.imagePositions.positions.length : 0;
+    var originalSubheadingCount = structure.subheadings ? structure.subheadings.length : 3;
+    var originalCharCount = (structure.intro ? structure.intro.charCount : 0) +
+                            (structure.body ? structure.body.charCount : 0) +
+                            (structure.conclusion ? structure.conclusion.charCount : 0);
+    var targetLength = calculateTargetLength(structure, options.lengthRatio);
 
-      var hasBusinessInfo = options.businessName || options.businessInfo;
-
-      if (isReinterpret) {
-        prompt += '## 핵심 지시 - 재해석 모드 ##\n';
-        prompt += '위 원본 글을 반드시 기반으로 하되, 다음 규칙을 따르세요:\n';
-        prompt += '1. 원본 글의 전체 구조(서론-본론-결론)와 소제목 순서를 그대로 유지하세요.\n';
-        prompt += '2. 원본 글이 다루는 주제, 정보, 핵심 내용을 빠짐없이 포함하세요.\n';
-        prompt += '3. 각 문단의 내용과 의미는 유지하면서, 표현과 문장을 새롭게 바꿔 작성하세요.\n';
-        if (hasBusinessInfo) {
-          prompt += '4. 원본의 사업장명, 상호명, 위치, 가격, 전화번호 등 사업장 고유 정보는 위에 제공된 [사업장/작성자 정보]로 자연스럽게 교체하세요.\n';
-          prompt += '5. 사업장 정보 외의 일반적인 내용(팁, 설명, 경험 등)은 원본의 흐름을 유지하세요.\n';
-        } else {
-          prompt += '4. 원본에 있는 구체적인 정보(가격, 위치, 수치 등)는 그대로 유지하세요.\n';
-        }
-        prompt += (hasBusinessInfo ? '6' : '5') + '. 원본에 없는 내용을 임의로 추가하거나, 원본의 내용을 빼지 마세요.\n';
-        prompt += (hasBusinessInfo ? '7' : '6') + '. 문장 순서와 흐름은 원본을 따르되, 동일한 문장을 그대로 복사하지는 마세요.\n\n';
-      } else {
-        prompt += '## 핵심 지시 - 참고용 모드 ##\n';
-        prompt += '위 원본 글을 참고하여 같은 주제로 글을 작성하세요.\n';
-        prompt += '1. 원본 글의 구조와 흐름을 최대한 따르세요.\n';
-        if (hasBusinessInfo) {
-          prompt += '2. 원본의 사업장 고유 정보(상호명, 위치, 가격 등)는 위에 제공된 [사업장/작성자 정보]로 교체하세요.\n';
-          prompt += '3. 사업장 정보 외의 일반적인 내용은 원본을 참고하여 새롭게 작성하세요.\n';
-        } else {
-          prompt += '2. 원본의 핵심 정보와 데이터를 유지하면서 문장을 새롭게 작성하세요.\n';
-        }
-        prompt += (hasBusinessInfo ? '4' : '3') + '. 원본에 없는 내용을 임의로 추가하지 마세요.\n\n';
-      }
+    // 독창성 레벨별 이미지 수 결정 (상한선 적용)
+    var recommendedImageCount;
+    if (options.creativityLevel === '참고용') {
+      recommendedImageCount = Math.min(15, originalImageCount);
+    } else if (options.creativityLevel === '재해석') {
+      recommendedImageCount = Math.min(12, Math.max(1, Math.round(originalImageCount * 0.8)));
+    } else {
+      recommendedImageCount = Math.min(10, Math.max(1, Math.round(originalImageCount * 0.6)));
     }
 
-    prompt += '[원본 글 구조 분석]\n';
-    prompt += '- 서론: ' + structure.intro.percent + '% (' + (structure.intro.style || '일반') + ')\n';
-    prompt += '- 본론: ' + structure.body.percent + '% (' + structure.body.sectionCount + '개 섹션)\n';
-    prompt += '- 결론: ' + structure.conclusion.percent + '% (' + (structure.conclusion.style || '일반') + ')\n';
+    // 스타일 한글 변환
+    var styleNameMap = { 'formal': '정중한 존댓말(합니다체)', 'casual': '친근한 해요체', 'informal': '편안한 반말' };
+    var toneNameMap = { 'concise': '간결한', 'balanced': '균형잡힌', 'detailed': '상세한', 'neutral': '중립적인' };
+    var hookNameMap = { 'question': '질문형', 'exclamation': '감탄형', 'greeting': '인사형', 'statistic': '통계형', 'storytelling': '스토리텔링', 'direct': '직접 진술' };
+    var styleName = styleNameMap[style.writingStyle] || style.writingStyle;
+    var toneName = toneNameMap[style.tone] || style.tone;
+    var hookName = hookNameMap[style.hookType] || style.hookType;
+
+    prompt += '[원본 글 구조]\n';
+    prompt += '- 전체 글자수: ' + originalCharCount + '자\n';
+    prompt += '- 서론: ' + structure.intro.percent + '% (' + structure.intro.charCount + '자, ' + (structure.intro.style || '일반') + ')\n';
+    prompt += '- 본론: ' + structure.body.percent + '% (' + structure.body.charCount + '자, ' + structure.body.sectionCount + '개 섹션)\n';
+    prompt += '- 결론: ' + structure.conclusion.percent + '% (' + structure.conclusion.charCount + '자, ' + (structure.conclusion.style || '일반') + ')\n';
+    prompt += '- 소제목 수: ' + originalSubheadingCount + '개\n';
     prompt += '- 평균 문단 길이: ' + structure.avgParagraphLength + '자\n';
-    prompt += '- 원본 이미지 수: ' + (structure.imagePositions ? structure.imagePositions.positions.length : 0) + '장\n\n';
+    prompt += '- 원본 이미지 수: ' + originalImageCount + '장\n\n';
 
     prompt += '[분석된 스타일 - 반드시 이 스타일로 작성]\n';
-    prompt += '- 어조: ' + style.tone + '\n';
-    prompt += '- 문체: ' + style.writingStyle + '\n';
+    prompt += '- 문체: ' + styleName + '\n';
+    prompt += '- 어조: ' + toneName + '\n';
     prompt += '- 문장 패턴: 서술형 ' + style.sentenceTypes.statement + '%, 질문형 ' + style.sentenceTypes.question + '%, 감탄형 ' + style.sentenceTypes.exclamation + '%\n';
-    prompt += '- 첫문장 유형: ' + style.hookType + '\n';
+    prompt += '- 첫문장 유형: ' + hookName + '\n';
     prompt += '- 평균 문장 길이: ' + style.avgSentenceLength + '자\n';
     if (style.emoji && style.emoji.count > 0) {
       prompt += '- 이모지 활용: ' + style.emoji.unique.slice(0, 5).join('') + ' (비슷한 이모지 활용)\n';
@@ -1628,30 +1993,51 @@ document.addEventListener('DOMContentLoaded', function() {
     prompt += '- 메인 키워드: ' + options.mainKeyword + '\n';
     prompt += '- 서브 키워드: ' + (options.subKeywords.length > 0 ? options.subKeywords.join(', ') : '없음') + '\n\n';
 
-    prompt += '[요청 사항]\n';
-    if (isReinterpret) {
-      prompt += '위 원본 글의 구조와 내용을 유지하면서, 새로운 표현과 문장으로 재작성해주세요.\n';
-      prompt += '원본의 소제목, 문단 순서, 핵심 정보는 그대로 두고 표현만 바꾸세요.\n\n';
-    } else if (isReference) {
-      prompt += '위 원본 글을 최대한 참고하여 같은 주제의 블로그 글을 작성해주세요.\n\n';
+    // 최소 글자수 보장 (최소 2000자, 원본의 80% 이상)
+    var minLength = Math.max(2000, Math.round(targetLength * 0.8));
+
+    // 독창성 레벨별 프롬프트 분기
+    if (options.creativityLevel === '참고용') {
+      prompt += '[모드: 참고용 - 원본 구조 최대한 유지]\n';
+      prompt += '원본 글의 구조, 문체, 문단 배치, 이미지 위치를 최대한 따라가되, 키워드만 바꿔서 작성하세요.\n';
+      prompt += '- 서론/본론/결론 비율을 원본과 동일하게 유지 (' + structure.intro.percent + '/' + structure.body.percent + '/' + structure.conclusion.percent + '%)\n';
+      prompt += '- 소제목 개수: ' + originalSubheadingCount + '개 (원본과 동일)\n';
+      prompt += '- 이미지 위치: [이미지 N: 설명] 형식으로 번호를 매겨 ' + recommendedImageCount + '곳에 표시 (원본과 동일한 위치)\n';
+      prompt += '- 문단 수와 각 문단 길이도 원본과 비슷하게 유지\n\n';
+    } else if (options.creativityLevel === '재해석') {
+      prompt += '[모드: 재해석 - 원본 구조 참고 + 새로운 표현]\n';
+      prompt += '원본 글의 구조를 기반으로 하되, 표현과 전개 방식을 새롭게 작성하세요.\n';
+      prompt += '- 서론/본론/결론 구조를 유지하되 비율은 약간 조정 가능\n';
+      prompt += '- 소제목 개수: ' + originalSubheadingCount + '개 전후\n';
+      prompt += '- 이미지 위치: [이미지 N: 설명] 형식으로 번호를 매겨 ' + recommendedImageCount + '곳에 표시\n';
+      prompt += '- 원본의 핵심 논점은 유지하면서 다른 각도로 서술\n\n';
     } else {
-      prompt += '위 분석된 스타일과 어조를 정확히 반영하여 창의적으로 변형하여 새로운 블로그 글을 작성해주세요.\n\n';
+      prompt += '[모드: 창작 - 원본 스타일만 참고 + 자유 창작]\n';
+      prompt += '원본 글의 문체와 어조만 참고하고, 내용과 구조는 자유롭게 새로 작성하세요.\n';
+      prompt += '- 서론/본론/결론 기본 구조만 유지\n';
+      prompt += '- 소제목 개수: 자유 (원본 ' + originalSubheadingCount + '개 참고)\n';
+      prompt += '- 이미지 위치: [이미지 N: 설명] 형식으로 번호를 매겨 ' + recommendedImageCount + '곳에 표시\n';
+      prompt += '- 독창적인 관점과 새로운 정보를 포함\n\n';
     }
-    prompt += '독창성 레벨: ' + options.creativityLevel + '\n';
-    prompt += '목표 길이: 약 ' + calculateTargetLength(structure, options.lengthRatio) + '자\n\n';
+
+    prompt += '⚠️ [필수 글자수 규칙 - 반드시 준수] ⚠️\n';
+    prompt += '- 목표 글자수: ' + targetLength + '자\n';
+    prompt += '- 최소 글자수: ' + minLength + '자 (이 이하로 작성하면 안 됩니다!)\n';
+    prompt += '- 원본 글자수: ' + originalCharCount + '자\n';
+    prompt += '- 글을 절대로 요약하거나 축약하지 마세요\n';
+    prompt += '- 각 섹션(서론/본론/결론)을 충분히 길고 상세하게 작성하세요\n';
+    prompt += '- 짧은 글은 SEO에 불리합니다. 반드시 목표 글자수에 맞춰 충실하게 작성하세요\n\n';
 
     prompt += '[글 작성 지침]\n';
     prompt += '1. 첫 줄은 반드시 [제목] SEO 최적화된 제목 형식으로 작성\n';
     prompt += '2. 마크다운 없이 순수 텍스트로만 작성\n';
-    prompt += '3. 분석된 스타일(' + style.writingStyle + ', ' + style.tone + ')을 정확히 유지\n';
-    prompt += '4. ' + (style.hookType === 'question' ? '질문으로 시작하여 독자의 관심을 끌어주세요' : '흥미로운 도입부로 시작해주세요') + '\n';
-    prompt += '5. 서론-본론-결론 구조를 유지\n';
-    prompt += '6. ' + (structure.subheadings ? structure.subheadings.length : 3) + '개 정도의 소제목 활용\n';
-    // 이미지 개수: 최소 2개, 최대 5개로 제한 (원본의 50% 수준)
-    var originalImageCount = structure.imagePositions ? structure.imagePositions.positions.length : 0;
-    var recommendedImageCount = Math.min(5, Math.max(2, Math.round(originalImageCount * 0.5)));
-    prompt += '7. 이미지 위치는 [이미지: 설명] 형식으로 ' + recommendedImageCount + '곳에 표시 (적절한 간격으로 배치)\n';
-    prompt += '8. 메인 키워드 "' + options.mainKeyword + '"를 제목, 첫 문단, 소제목에 자연스럽게 포함\n\n';
+    prompt += '3. 문체는 반드시 ' + styleName + '으로 통일\n';
+    prompt += '4. ' + (style.hookType === 'question' ? '질문으로 시작하여 독자의 관심을 끌어주세요' :
+                       style.hookType === 'statistic' ? '구체적인 숫자/통계로 시작하여 신뢰감을 주세요' :
+                       style.hookType === 'storytelling' ? '짧은 이야기/경험담으로 시작하여 몰입감을 주세요' :
+                       style.hookType === 'greeting' ? '자연스러운 인사로 시작하세요' :
+                       '흥미로운 도입부로 시작해주세요') + '\n';
+    prompt += '5. 메인 키워드 "' + options.mainKeyword + '"를 제목, 첫 문단, 소제목에 자연스럽게 포함\n\n';
 
     // 학습된 인사이트 반영
     if (options.learnedInsights && options.learnedInsights.totalAnalyzed >= 3) {
@@ -1674,11 +2060,12 @@ document.addEventListener('DOMContentLoaded', function() {
       prompt += options.customRequest + '\n\n';
     }
 
-    // 최종 마크다운 금지 리마인더
-    prompt += '## 최종 확인 - 마크다운 절대 금지 ##\n';
-    prompt += '다시 한번 강조: 글에 **볼드**, *이탤릭*, # 헤딩 등 어떤 마크다운도 사용하지 마세요.\n';
-    prompt += '"**단어:**" 형식으로 쓰지 말고, "단어:" 형식의 일반 텍스트로만 작성하세요.\n';
-    prompt += '소제목 강조가 필요하면 줄바꿈과 빈 줄로 구분하세요.\n';
+    // 최종 리마인더
+    prompt += '## 최종 확인 ##\n';
+    prompt += '1. 마크다운 절대 금지: **볼드**, *이탤릭*, # 헤딩 등 어떤 마크다운도 사용하지 마세요.\n';
+    prompt += '   "**단어:**" 형식으로 쓰지 말고, "단어:" 형식의 일반 텍스트로만 작성하세요.\n';
+    prompt += '   소제목 강조가 필요하면 줄바꿈과 빈 줄로 구분하세요.\n';
+    prompt += '2. 글자수 필수: 반드시 ' + minLength + '자 이상, 목표 ' + targetLength + '자로 작성하세요. 짧게 쓰지 마세요!\n';
 
     return prompt;
   }
@@ -1728,8 +2115,10 @@ document.addEventListener('DOMContentLoaded', function() {
     return new Promise(function(resolve, reject) {
       if (navigator.clipboard && navigator.clipboard.writeText) {
         navigator.clipboard.writeText(text).then(resolve).catch(function() {
-          // 폴백: textarea 방식
-          fallbackCopy(text) ? resolve() : reject(new Error('복사 실패'));
+          // 확장프로그램 사이드패널에서 clipboard API가 실제로 복사하지만
+          // Promise가 reject되는 경우가 있으므로 폴백 시도 후 항상 resolve
+          fallbackCopy(text);
+          resolve();
         });
       } else {
         fallbackCopy(text) ? resolve() : reject(new Error('복사 실패'));
@@ -1845,6 +2234,9 @@ document.addEventListener('DOMContentLoaded', function() {
   // ========== 클립보드 복사 기능 ==========
 
   var startTypingBtn = document.getElementById('startTypingBtn');
+  var typingProgress = document.getElementById('typingProgress');
+  var typingProgressFill = document.getElementById('typingProgressFill');
+  var typingProgressText = document.getElementById('typingProgressText');
 
   /**
    * 글쓰기 (클립보드 복사)
@@ -1858,16 +2250,20 @@ document.addEventListener('DOMContentLoaded', function() {
       return;
     }
 
-    // 이미지 플레이스홀더 변환
-    var imageCount = 0;
-    var processedText = text.replace(/\[이미지:\s*([^\]]+)\]/g, function(match, desc) {
-      imageCount++;
-      return '[이미지 ' + imageCount + ', ' + desc.trim() + ']';
-    });
+    // 이미지 플레이스홀더는 이미 번호가 매겨져 있으므로 그대로 사용
+    var processedText = text;
 
     // 클립보드에 복사
     safeCopy(processedText).then(function() {
+      typingProgressFill.style.width = '100%';
+      typingProgressText.textContent = '복사 완료!';
+      typingProgress.style.display = 'block';
+
       alert('✅ 클립보드에 복사되었습니다!\n\n네이버 블로그 본문을 클릭한 후\nCtrl+V로 붙여넣기 하세요.');
+
+      setTimeout(function() {
+        typingProgress.style.display = 'none';
+      }, 3000);
     }).catch(function(err) {
       console.error('클립보드 복사 실패:', err);
       alert('클립보드 복사에 실패했습니다.');
@@ -2226,9 +2622,9 @@ document.addEventListener('DOMContentLoaded', function() {
       console.error('YouTube 블로그 생성 오류:', error);
       alert('생성 중 오류가 발생했습니다.');
     } finally {
+      youtubeGenerateBtn.disabled = false;
       youtubeGenerateBtn.innerHTML = '<span>✨</span> AI로 블로그 글 생성하기';
       showLoading(false);
-      startCooldown(youtubeGenerateBtn, 30);
     }
   }
 

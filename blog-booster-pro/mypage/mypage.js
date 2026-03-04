@@ -132,8 +132,9 @@ document.addEventListener('DOMContentLoaded', async function() {
 
     // 플랜 정보
     var plan = user.plan || data.plan || 'free';
-    var planText = plan === 'pro' ? 'PRO 플랜' :
-                   plan === 'unlimited' ? 'Unlimited 플랜' : '일반 플랜';
+    var planText = plan === 'free' ? '무료 플랜' :
+                   plan === 'pro' ? 'PRO 플랜' :
+                   plan === 'premium' ? 'Premium 플랜' : '무료 플랜';
     profilePlan.textContent = planText;
     profilePlan.className = 'plan-badge ' + plan;
 
@@ -400,12 +401,9 @@ document.addEventListener('DOMContentLoaded', async function() {
       await chrome.storage.local.set({
         isLoggedIn: false,
         userInfo: null,
-        firebaseIdToken: null,
-        firebaseRefreshToken: null,
-        firebaseTokenTimestamp: null
+        firebaseIdToken: null
       });
-      // 로그인 페이지로 이동
-      window.location.href = chrome.runtime.getURL('auth/login.html');
+      window.close();
     } catch (error) {
       console.error('로그아웃 오류:', error);
       showToast('로그아웃에 실패했습니다.');

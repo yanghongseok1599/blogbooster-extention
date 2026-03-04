@@ -255,12 +255,53 @@ const BlogAnalyzer = {
       .sort((a, b) => b[1] - a[1])
       .map(([keyword, freq]) => ({ keyword, freq }));
 
-    const mainKeyword = sortedKeywords[0]?.keyword || '';
-    const subKeywords = sortedKeywords.slice(1, 11).map(k => k.keyword);
+    // 메인 키워드: 제목+본문빈도+태그 교차 분석
+    let mainKeyword = '';
+    {
+      const titleWords = title.match(/[가-힣a-zA-Z0-9]{2,}/g) || [];
+      const bodyWords = text.match(/[가-힣a-zA-Z0-9]{2,}/g) || [];
+      const bodyFreq = {};
+      bodyWords.forEach(w => { bodyFreq[w] = (bodyFreq[w] || 0) + 1; });
+      const cleanTags = tags.map(t => t.replace(/^#/, '').trim()).filter(t => t.length >= 2);
+
+      const kwStopwords = ['있는', '하는', '되는', '그리고', '하지만', '그래서', '그런데', '그러나',
+        '또한', '이런', '저런', '이것', '저것', '때문', '정말', '진짜', '너무', '매우',
+        '아주', '가장', '더욱', '오늘', '내일', '어제', '결국', '이렇게', '블로그'];
+
+      const candidates = [];
+      titleWords.forEach(tw => {
+        if (kwStopwords.includes(tw)) return;
+        const freq = bodyFreq[tw] || 0;
+        const tagBonus = cleanTags.some(tag => tag.includes(tw) || tw.includes(tag)) ? 10 : 0;
+        const compoundBonus = title.includes(tw) && tw.length >= 4 ? 5 : 0;
+        candidates.push({ word: tw, score: freq + tagBonus + compoundBonus + tw.length });
+      });
+      cleanTags.forEach(tag => {
+        if (tag.length >= 2 && !kwStopwords.includes(tag)) {
+          const inTitle = title.includes(tag);
+          const freq = bodyFreq[tag] || 0;
+          candidates.push({ word: tag, score: freq + (inTitle ? 20 : 0) + tag.length });
+        }
+      });
+      candidates.sort((a, b) => b.score - a.score);
+      const seen = {};
+      for (const c of candidates) {
+        if (!seen[c.word]) { mainKeyword = c.word; break; }
+        seen[c.word] = true;
+      }
+      if (!mainKeyword && sortedKeywords.length > 0) {
+        mainKeyword = sortedKeywords[0].keyword;
+      }
+    }
+    const subKeywords = sortedKeywords
+      .filter(k => k.keyword !== mainKeyword)
+      .slice(0, 10)
+      .map(k => k.keyword);
 
     // 키워드 밀도 계산
+    const escapeRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const totalWords = text.split(/\s+/).length;
-    const mainKeywordCount = (text.match(new RegExp(mainKeyword, 'gi')) || []).length;
+    const mainKeywordCount = mainKeyword ? (text.match(new RegExp(escapeRe(mainKeyword), 'gi')) || []).length : 0;
     const density = totalWords > 0 ? ((mainKeywordCount / totalWords) * 100).toFixed(2) : 0;
 
     // 키워드 위치맵
@@ -286,11 +327,30 @@ const BlogAnalyzer = {
     const words = text.match(/[가-힣]{2,}/g) || [];
 
     // 불용어 제거
-    const stopwords = ['있는', '하는', '되는', '있습니다', '합니다', '됩니다', '그리고',
-                       '하지만', '그래서', '그런데', '그러나', '또한', '이런', '저런',
-                       '이것', '저것', '여기', '거기', '오늘', '내일', '어제'];
+    const stopwords = [
+      '있는', '하는', '되는', '없는', '같은', '다른', '많은', '좋은',
+      '있습니다', '합니다', '됩니다', '없습니다', '같습니다', '봅니다', '줍니다',
+      '있어요', '해요', '돼요', '없어요', '같아요',
+      '했습니다', '됐습니다', '았습니다', '었습니다', '아닙니다', '입니다', '습니다',
+      '그리고', '하지만', '그래서', '그런데', '그러나', '또한', '그래도', '그러면',
+      '그렇게', '그러니', '그러므로', '따라서', '때문에', '근데', '그럼',
+      '이런', '저런', '그런', '이것', '저것', '그것', '여기', '거기', '저기',
+      '이거', '저거', '그거', '이게', '저게', '그게', '이건', '저건', '그건',
+      '이렇게', '저렇게', '그렇게',
+      '정말', '진짜', '너무', '매우', '아주', '가장', '더욱', '완전', '엄청', '되게',
+      '오늘', '내일', '어제', '지금', '나중', '최근', '요즘',
+      '때문', '무엇', '어떤', '모든', '것이', '수가', '것은', '것을', '정도', '경우',
+      '글을', '글이', '글은', '말을', '말이', '말은',
+      '하다', '되다', '있다', '없다', '보다', '주다', '같다', '싶다',
+      '하게', '하면', '하고', '해도', '해야', '해서', '하니',
+      '되면', '되고', '되어', '돼서', '되니'
+    ];
 
-    return words.filter(w => !stopwords.includes(w) && w.length >= 2);
+    return words.filter(w => {
+      if (stopwords.includes(w) || w.length < 2) return false;
+      if (w.length === 2 && /[을를은는이가의에도로서와과만]$/.test(w)) return false;
+      return true;
+    });
   },
 
   /**
@@ -431,16 +491,16 @@ const BlogAnalyzer = {
       // 문장 끝 부분 추출 (마지막 10자)
       const ending = trimmed.slice(-10);
 
-      // 존댓말 (합니다체) - 가장 정중한 표현
-      if (/(?:입니다|습니다|됩니다|있습니다|었습니다|겠습니다|십니다)/.test(ending)) {
+      // 존댓말 (합니다체) - 니다/니까로 끝나는 모든 형태
+      if (/니다$|니까$/.test(ending)) {
         counts.formal += 2;
       }
-      // 해요체 - 친근하면서 존중하는 표현
-      else if (/(?:해요|예요|에요|세요|네요|죠|거든요|잖아요|는데요|어요|아요|여요|려고요|군요|구요|래요|나요)/.test(ending)) {
+      // 해요체 - 요로 끝나는 모든 형태
+      else if (/요$|죠$/.test(ending)) {
         counts.casual += 2;
       }
       // 반말 (해체/해라체) - 문장 끝이 반말 어미인 경우만
-      else if (/(?:해$|야$|어$|아$|지$|네$|군$|구$|다$|니\?|냐\?|는다$|ㄴ다$|란다$|했어$|했지$|같아$|싶어$|할게$|갈게$)/.test(ending)) {
+      else if (/(?:해$|야$|어$|아$|지$|네$|군$|구$|는다$|ㄴ다$|란다$|했어$|했지$|같아$|싶어$|할게$|갈게$|한다$|된다$|온다$|간다$)/.test(ending)) {
         counts.informal += 2;
       }
       // 명사형 종결 (체언 종결) - 블로그에서 자주 사용
@@ -466,9 +526,17 @@ const BlogAnalyzer = {
   analyzeSEO(data, keywords) {
     // NaverSEOAnalyzer 엔진 사용
     if (typeof NaverSEOAnalyzer !== 'undefined') {
+      // 문단 구분된 content 생성 (getFirstParagraph가 \n으로 분리)
+      const paragraphTexts = (data.paragraphs || [])
+        .map(p => typeof p === 'string' ? p : (p.text || ''))
+        .filter(t => t.length > 10);
+      const contentForSEO = paragraphTexts.length > 0
+        ? paragraphTexts.join('\n\n')
+        : (data.fullText || '');
+
       const result = NaverSEOAnalyzer.analyze({
         title: data.title || '',
-        content: data.fullText || '',
+        content: contentForSEO,
         keyword: keywords.mainKeyword || '',
         imageCount: data.images ? data.images.length : 0,
         subheadingCount: data.subheadings ? data.subheadings.length : 0,

@@ -29,21 +29,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // 이미 로그인되어 있는지 확인
     FirebaseAuth.onAuthStateChanged(async (user) => {
       if (user && !loggedOut) {
-        // chrome.storage에서 로그아웃 상태인지 먼저 확인
-        try {
-          const storageResult = await chrome.storage.local.get(['isLoggedIn']);
-          if (storageResult.isLoggedIn === false) {
-            // 명시적으로 로그아웃한 상태이므로 자동 로그인하지 않음
-            return;
-          }
-        } catch (e) {
-          // storage 조회 실패 시 그냥 진행
-        }
-        try {
-          await FirebaseAuth.syncAuthState();
-        } catch (e) {
-          console.warn('[Login] onAuthStateChanged syncAuthState 실패:', e);
-        }
+        await FirebaseAuth.syncAuthState();
         showLoginSuccess();
       }
     });
@@ -116,19 +102,13 @@ document.addEventListener('DOMContentLoaded', function() {
 
       if (result.success) {
         loggedOut = false;
-        // syncAuthState 실패해도 로그인 자체는 성공 처리
-        try {
-          await FirebaseAuth.syncAuthState();
-        } catch (syncError) {
-          console.warn('[Login] syncAuthState 실패 (로그인은 성공):', syncError);
-        }
+        await FirebaseAuth.syncAuthState();
         showLoginSuccess();
       } else {
         showMessage('error', result.error);
       }
     } catch (error) {
-      console.error('[Login] 로그인 오류:', error);
-      showMessage('error', '로그인 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.');
+      showMessage('error', '로그인 중 오류가 발생했습니다.');
     } finally {
       setLoading(loginForm, false);
     }
@@ -239,20 +219,14 @@ document.addEventListener('DOMContentLoaded', function() {
           }
         }
 
-        // syncAuthState 실패해도 회원가입 자체는 성공 처리
-        try {
-          await FirebaseAuth.syncAuthState();
-        } catch (syncError) {
-          console.warn('[Signup] syncAuthState 실패 (회원가입은 성공):', syncError);
-        }
+        await FirebaseAuth.syncAuthState();
 
         showLoginSuccess();
       } else {
         showMessage('error', result.error);
       }
     } catch (error) {
-      console.error('[Signup] 회원가입 오류:', error);
-      showMessage('error', '회원가입 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.');
+      showMessage('error', '회원가입 중 오류가 발생했습니다.');
     } finally {
       setLoading(signupForm, false);
     }
@@ -318,9 +292,12 @@ document.addEventListener('DOMContentLoaded', function() {
     authMessage.style.display = 'none';
   }
 
-  // 로그인 성공 후 마이페이지로 이동
+  // 로그인 성공 후 패널 표시
   function showLoginSuccess() {
-    window.location.href = chrome.runtime.getURL('mypage/mypage.html');
+    const authContainer = document.querySelector('.auth-container');
+    const panelWrapper = document.getElementById('panelWrapper');
+    authContainer.style.display = 'none';
+    panelWrapper.style.display = 'block';
   }
 
   // iframe(패널)에서 로그아웃 메시지 수신

@@ -2,56 +2,8 @@
  * 블로그 부스터 Pro - 관리자 페이지
  */
 
-// 기본 관리자 비밀번호
-const DEFAULT_ADMIN_PASSWORD = (typeof ENV_CONFIG !== 'undefined' && ENV_CONFIG.defaultAdminPassword) ? ENV_CONFIG.defaultAdminPassword : '315477aa';
-
-// 관리자 인증 - 최우선 등록 (다른 코드 에러와 무관하게 동작)
-document.addEventListener('DOMContentLoaded', function() {
-  const authSection = document.getElementById('authSection');
-  const adminMain = document.getElementById('adminMain');
-  const adminPassword = document.getElementById('adminPassword');
-  const authBtn = document.getElementById('authBtn');
-  const authError = document.getElementById('authError');
-
-  function authSuccess() {
-    authSection.style.display = 'none';
-    adminMain.style.display = 'flex';
-    document.dispatchEvent(new Event('adminAuthenticated'));
-  }
-
-  async function doAuth() {
-    const pw = adminPassword.value.trim();
-    console.log('[Admin] 인증 시도 - 입력:', pw, '기본:', DEFAULT_ADMIN_PASSWORD, '일치:', pw === DEFAULT_ADMIN_PASSWORD);
-    if (!pw) {
-      if (authError) { authError.textContent = '비밀번호를 입력하세요.'; authError.style.display = 'block'; }
-      return;
-    }
-
-    // 1) 기본 비밀번호 확인
-    if (pw === DEFAULT_ADMIN_PASSWORD) {
-      chrome.storage.local.set({ adminPassword: pw });
-      authSuccess();
-      return;
-    }
-
-    // 2) 저장된 비밀번호 확인 (변경한 경우)
-    try {
-      const result = await chrome.storage.local.get(['adminPassword']);
-      console.log('[Admin] 저장된 비밀번호:', result.adminPassword, '일치:', pw === result.adminPassword);
-      if (result.adminPassword && pw === result.adminPassword) {
-        authSuccess();
-        return;
-      }
-    } catch (e) {
-      console.warn('[Admin] storage 조회 실패:', e);
-    }
-
-    if (authError) { authError.textContent = '비밀번호가 일치하지 않습니다.'; authError.style.display = 'block'; }
-  }
-
-  if (authBtn) authBtn.addEventListener('click', doAuth);
-  if (adminPassword) adminPassword.addEventListener('keypress', function(e) { if (e.key === 'Enter') doAuth(); });
-});
+// 기본 관리자 비밀번호 (env-config.js에서 로드)
+const DEFAULT_ADMIN_PASSWORD = ENV_CONFIG.defaultAdminPassword;
 
 document.addEventListener('DOMContentLoaded', function() {
   // 요소 참조
@@ -84,10 +36,8 @@ document.addEventListener('DOMContentLoaded', function() {
   // 설정
   const newAdminPassword = document.getElementById('newAdminPassword');
   const changePasswordBtn = document.getElementById('changePasswordBtn');
-  const geminiApiKeysInput = document.getElementById('geminiApiKeysInput');
-  const saveGeminiApiKeysBtn = document.getElementById('saveGeminiApiKeysBtn');
-  const dailyLimitInput = document.getElementById('dailyLimitInput');
-  const saveDailyLimitBtn = document.getElementById('saveDailyLimitBtn');
+  const serverApiKey = document.getElementById('serverApiKey');
+  const saveServerApiBtn = document.getElementById('saveServerApiBtn');
 
   let currentCodes = [];
   let allPromoCodes = [];
@@ -107,10 +57,39 @@ document.addEventListener('DOMContentLoaded', function() {
     return null;
   }
 
-  // 인증 완료 시 데이터 로드 (상단의 독립 인증 핸들러에서 트리거됨)
-  document.addEventListener('adminAuthenticated', function() {
-    loadAllData();
-  });
+  /**
+   * 관리자 인증
+   */
+  async function authenticate() {
+    const password = adminPassword.value.trim();
+    if (!password) {
+      showAuthError('비밀번호를 입력하세요.');
+      return;
+    }
+
+    try {
+      const result = await chrome.storage.local.get(['adminPassword']);
+      const storedPassword = result.adminPassword || DEFAULT_ADMIN_PASSWORD;
+
+      if (password === storedPassword) {
+        authSection.style.display = 'none';
+        adminMain.style.display = 'flex';
+        loadAllData();
+      } else {
+        showAuthError('비밀번호가 일치하지 않습니다.');
+      }
+    } catch (error) {
+      showAuthError('인증 중 오류가 발생했습니다.');
+    }
+  }
+
+  function showAuthError(message) {
+    authError.textContent = message;
+    authError.style.display = 'block';
+    setTimeout(() => {
+      authError.style.display = 'none';
+    }, 3000);
+  }
 
   /**
    * 프로모션 코드 생성
@@ -275,15 +254,10 @@ document.addEventListener('DOMContentLoaded', function() {
           freeAccessCheckbox.checked = response.settings.freeAccessEnabled || false;
         }
 
-        // Gemini API 키 다중 로드
-        if (geminiApiKeysInput && response.settings.geminiApiKeys && response.settings.geminiApiKeys.length > 0) {
-          geminiApiKeysInput.value = response.settings.geminiApiKeys.join('\n');
+        // Gemini API 키 로드 (Firebase에서 배열로 가져와 textarea에 표시)
+        if (response.settings.geminiApiKeys && response.settings.geminiApiKeys.length > 0) {
+          serverApiKey.value = response.settings.geminiApiKeys.join('\n');
           console.log('[Admin] Gemini API 키 로드됨:', response.settings.geminiApiKeys.length, '개');
-        }
-
-        // 일일 사용 제한 로드
-        if (dailyLimitInput) {
-          dailyLimitInput.value = response.settings.dailyLimit || 10;
         }
 
         // YouTube API 키 로드
@@ -316,6 +290,9 @@ document.addEventListener('DOMContentLoaded', function() {
     saveYouTubeApiBtn.textContent = '저장 중...';
 
     try {
+      // Firebase 토큰 갱신
+      await refreshFirebaseToken();
+
       const response = await new Promise((resolve) => {
         chrome.runtime.sendMessage({
           action: 'setYouTubeApiKeys',
@@ -471,86 +448,55 @@ document.addEventListener('DOMContentLoaded', function() {
   }
 
   /**
-   * Gemini API 키 다중 저장 (Firebase + 로컬 백업)
+   * 서버 API 키 저장 (Firebase + 로컬 백업)
    */
-  async function saveGeminiApiKeys() {
-    const keysInput = document.getElementById('geminiApiKeysInput');
-    const rawText = keysInput ? keysInput.value.trim() : '';
-    if (!rawText) {
+  async function saveServerApiKey() {
+    const rawValue = serverApiKey.value.trim();
+    if (!rawValue) {
       alert('API 키를 입력하세요.');
       return;
     }
 
-    const keys = rawText.split('\n').map(k => k.trim()).filter(k => k);
-    if (keys.length === 0) {
-      alert('유효한 API 키가 없습니다.');
+    // 여러 줄로 입력된 키를 배열로 변환
+    const apiKeys = rawValue.split('\n').map(k => k.trim()).filter(k => k.length > 10);
+    if (apiKeys.length === 0) {
+      alert('유효한 API 키를 입력하세요.');
       return;
     }
 
-    const saveBtn = document.getElementById('saveGeminiApiKeysBtn');
-    saveBtn.disabled = true;
-    saveBtn.textContent = '저장 중...';
+    saveServerApiBtn.disabled = true;
+    saveServerApiBtn.textContent = '저장 중...';
 
     try {
+      // Firebase 토큰 갱신 (1시간마다 만료되므로 저장 전 갱신 필요)
+      await refreshFirebaseToken();
+
       const freeAccessCheckbox = document.getElementById('freeAccessEnabled');
       const freeAccessEnabled = freeAccessCheckbox ? freeAccessCheckbox.checked : false;
 
-      // Firebase에 저장 (첫 번째 키는 기존 호환용 geminiApiKey, 전체는 geminiApiKeys 배열)
+      // Firebase에 저장 시도 (첫 번째 키 = 단일 키 호환, 전체 배열도 저장)
       const response = await new Promise((resolve) => {
         chrome.runtime.sendMessage({
           action: 'saveGeminiApiKeyToFirebase',
-          apiKey: keys[0],
-          options: { freeAccessEnabled, geminiApiKeys: keys }
+          apiKey: apiKeys[0],
+          options: { freeAccessEnabled, geminiApiKeys: apiKeys }
         }, resolve);
       });
 
       if (response && response.success) {
-        await chrome.storage.local.set({ geminiApiKeys: keys, serverGeminiApiKey: keys[0] });
-        alert(`Gemini API 키 ${keys.length}개가 저장되었습니다.`);
+        await chrome.storage.local.set({ serverGeminiApiKey: apiKeys[0] });
+        alert(`Gemini API 키 ${apiKeys.length}개가 Firebase에 저장되었습니다.\n로테이션이 활성화됩니다.`);
       } else {
-        await chrome.storage.local.set({ geminiApiKeys: keys, serverGeminiApiKey: keys[0] });
+        await chrome.storage.local.set({ serverGeminiApiKey: apiKeys[0] });
         alert('Firebase 저장 실패. 로컬에만 저장되었습니다.\n(' + (response?.error || '알 수 없는 오류') + ')');
       }
     } catch (error) {
       console.error('API 키 저장 오류:', error);
-      await chrome.storage.local.set({ geminiApiKeys: keys, serverGeminiApiKey: keys[0] });
+      await chrome.storage.local.set({ serverGeminiApiKey: apiKeys[0] });
       alert('Firebase 연결 실패. 로컬에만 저장되었습니다.');
     } finally {
-      saveBtn.disabled = false;
-      saveBtn.textContent = '저장';
-    }
-  }
-
-  /**
-   * 일일 사용 제한 저장
-   */
-  async function saveDailyLimit() {
-    const limitInput = document.getElementById('dailyLimitInput');
-    const limit = parseInt(limitInput.value) || 10;
-
-    const saveBtn = document.getElementById('saveDailyLimitBtn');
-    saveBtn.disabled = true;
-    saveBtn.textContent = '저장 중...';
-
-    try {
-      const response = await new Promise((resolve) => {
-        chrome.runtime.sendMessage({
-          action: 'saveGeminiApiKeyToFirebase',
-          apiKey: null,
-          options: { dailyLimit: limit }
-        }, resolve);
-      });
-
-      if (response && response.success) {
-        alert(`일일 사용 제한이 ${limit}회로 설정되었습니다.`);
-      } else {
-        alert('저장 실패: ' + (response?.error || '알 수 없는 오류'));
-      }
-    } catch (error) {
-      alert('저장 중 오류 발생');
-    } finally {
-      saveBtn.disabled = false;
-      saveBtn.textContent = '저장';
+      saveServerApiBtn.disabled = false;
+      saveServerApiBtn.textContent = '저장';
     }
   }
 
@@ -579,87 +525,6 @@ document.addEventListener('DOMContentLoaded', function() {
   const saveUserPlan = document.getElementById('saveUserPlan');
 
   let allUsersList = []; // 유저 목록 저장
-
-  // 누락 유저 추가 폼 토글
-  const toggleAddUserBtn = document.getElementById('toggleAddUserBtn');
-  const addUserForm = document.getElementById('addUserForm');
-  const addUserBtn = document.getElementById('addUserBtn');
-
-  if (toggleAddUserBtn) {
-    toggleAddUserBtn.addEventListener('click', function() {
-      addUserForm.style.display = addUserForm.style.display === 'none' ? 'block' : 'none';
-    });
-  }
-
-  if (addUserBtn) {
-    addUserBtn.addEventListener('click', async function() {
-      const uid = document.getElementById('addUserUid').value.trim();
-      const email = document.getElementById('addUserEmail').value.trim();
-      const nickname = document.getElementById('addUserNickname').value.trim();
-      const plan = document.getElementById('addUserPlan').value;
-
-      if (!uid || !email) {
-        alert('UID와 이메일은 필수입니다.');
-        return;
-      }
-
-      addUserBtn.disabled = true;
-      addUserBtn.textContent = '추가 중...';
-
-      try {
-        // Firestore에 직접 유저 문서 생성
-        const docRef = firebase.firestore().collection('users').doc(uid);
-        const existing = await docRef.get();
-
-        if (existing.exists) {
-          alert('이미 Firestore에 존재하는 유저입니다.');
-          return;
-        }
-
-        const now = new Date();
-        const userData = {
-          email: email,
-          name: nickname || email.split('@')[0],
-          nickname: nickname || email.split('@')[0],
-          displayName: nickname || email.split('@')[0],
-          plan: plan,
-          createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-          lastLoginAt: firebase.firestore.FieldValue.serverTimestamp(),
-          usageCount: 0,
-          isActive: true
-        };
-
-        // PRO/무제한이면 만료일 설정 (3개월 후)
-        if (plan !== 'free') {
-          const expiry = new Date();
-          expiry.setMonth(expiry.getMonth() + 3);
-          userData.planExpiry = expiry;
-        } else {
-          userData.planExpiry = null;
-        }
-
-        await docRef.set(userData);
-        alert('유저가 추가되었습니다: ' + email);
-
-        // 폼 초기화
-        document.getElementById('addUserUid').value = '';
-        document.getElementById('addUserEmail').value = '';
-        document.getElementById('addUserNickname').value = '';
-        document.getElementById('addUserPlan').value = 'free';
-        addUserForm.style.display = 'none';
-
-        // 목록 새로고침
-        loadUsersList();
-
-      } catch (error) {
-        console.error('유저 추가 오류:', error);
-        alert('유저 추가 실패: ' + error.message);
-      } finally {
-        addUserBtn.disabled = false;
-        addUserBtn.textContent = '추가';
-      }
-    });
-  }
 
   /**
    * 가입 유저 목록 로드
@@ -1340,7 +1205,128 @@ document.addEventListener('DOMContentLoaded', function() {
     return `${year}-${month}-${day} ${hours}:${minutes}`;
   }
 
-  // 이벤트 리스너 (인증은 상단 독립 핸들러에서 처리)
+  // ==================== 유저 검색 ====================
+
+  const searchUserInput = document.getElementById('searchUser');
+  if (searchUserInput) {
+    searchUserInput.addEventListener('input', function() {
+      const keyword = this.value.trim().toLowerCase();
+      if (!allUsersList.length) return;
+
+      if (!keyword) {
+        renderUsersList(allUsersList);
+        return;
+      }
+
+      const filtered = allUsersList.filter(u =>
+        (u.email && u.email.toLowerCase().includes(keyword)) ||
+        (u.nickname && u.nickname.toLowerCase().includes(keyword)) ||
+        (u.displayName && u.displayName.toLowerCase().includes(keyword))
+      );
+      renderUsersList(filtered);
+      usersListCount.textContent = `검색 결과: ${filtered.length}명 / 전체 ${allUsersList.length}명`;
+    });
+  }
+
+  // ==================== 유저 수동 추가 ====================
+
+  const addUserBtn = document.getElementById('addUserBtn');
+  if (addUserBtn) {
+    addUserBtn.addEventListener('click', addUserManually);
+  }
+
+  async function addUserManually() {
+    const email = document.getElementById('addUserEmail').value.trim();
+    const nickname = document.getElementById('addUserNickname').value.trim();
+    const plan = document.getElementById('addUserPlan').value;
+    const expiryValue = document.getElementById('addUserExpiry').value;
+
+    if (!email) {
+      alert('이메일을 입력하세요.');
+      return;
+    }
+
+    if (!email.includes('@')) {
+      alert('유효한 이메일 형식이 아닙니다.');
+      return;
+    }
+
+    addUserBtn.disabled = true;
+    addUserBtn.innerHTML = '<span class="btn-icon">⏳</span> 추가 중...';
+
+    try {
+      await refreshFirebaseToken();
+
+      const userData = {
+        email: email,
+        nickname: nickname || email.split('@')[0],
+        plan: plan,
+        createdAt: new Date().toISOString(),
+        lastLoginAt: new Date().toISOString()
+      };
+
+      if (plan !== 'free' && expiryValue) {
+        userData.planExpiry = new Date(expiryValue).toISOString();
+      }
+
+      // 이메일을 문서 ID로 사용하여 Firestore에 저장
+      const docId = encodeURIComponent(email);
+      const firestoreUrl = `https://firestore.googleapis.com/v1/projects/${ENV_CONFIG.firebase.projectId}/databases/(default)/documents/users/${docId}`;
+
+      // Firestore 문서 형식으로 변환
+      const firestoreFields = {};
+      for (const [key, value] of Object.entries(userData)) {
+        if (value === null || value === undefined) {
+          firestoreFields[key] = { nullValue: null };
+        } else if (typeof value === 'boolean') {
+          firestoreFields[key] = { booleanValue: value };
+        } else {
+          firestoreFields[key] = { stringValue: String(value) };
+        }
+      }
+
+      const token = await refreshFirebaseToken();
+      const response = await fetch(firestoreUrl, {
+        method: 'PATCH',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ fields: firestoreFields })
+      });
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.error?.message || `HTTP ${response.status}`);
+      }
+
+      alert(`유저 "${email}" 이(가) 추가되었습니다.`);
+
+      // 입력 필드 초기화
+      document.getElementById('addUserEmail').value = '';
+      document.getElementById('addUserNickname').value = '';
+      document.getElementById('addUserPlan').value = 'free';
+      document.getElementById('addUserExpiry').value = '';
+
+      // 유저 목록 새로고침
+      loadUsersList();
+
+    } catch (error) {
+      console.error('유저 추가 오류:', error);
+      alert('유저 추가 실패: ' + error.message);
+    } finally {
+      addUserBtn.disabled = false;
+      addUserBtn.innerHTML = '<span class="btn-icon">➕</span> 유저 추가';
+    }
+  }
+
+  // ==================== 이벤트 리스너 ====================
+
+  authBtn.addEventListener('click', authenticate);
+  adminPassword.addEventListener('keypress', function(e) {
+    if (e.key === 'Enter') authenticate();
+  });
+
   generateCodeBtn.addEventListener('click', generateCodes);
   copyAllCodes.addEventListener('click', copyAllCodesHandler);
 
@@ -1350,16 +1336,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
   cleanExpiredBtn.addEventListener('click', cleanExpiredCodes);
   changePasswordBtn.addEventListener('click', changePassword);
-
-  // Gemini API 키 다중 저장 버튼
-  if (saveGeminiApiKeysBtn) {
-    saveGeminiApiKeysBtn.addEventListener('click', saveGeminiApiKeys);
-  }
-
-  // 일일 사용 제한 저장 버튼
-  if (saveDailyLimitBtn) {
-    saveDailyLimitBtn.addEventListener('click', saveDailyLimit);
-  }
+  saveServerApiBtn.addEventListener('click', saveServerApiKey);
 
   // YouTube API 키 저장 버튼
   const saveYouTubeApiBtn = document.getElementById('saveYouTubeApiBtn');

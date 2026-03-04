@@ -30,12 +30,7 @@ function initializeFirebase() {
 
   if (!firebaseApp) {
     try {
-      // 이미 초기화된 앱이 있는지 확인
-      try {
-        firebaseApp = firebase.app();
-      } catch (e) {
-        firebaseApp = firebase.initializeApp(firebaseConfig);
-      }
+      firebaseApp = firebase.initializeApp(firebaseConfig);
       firebaseAuth = firebase.auth();
       firebaseDb = firebase.firestore();
       console.log('[Firebase] 초기화 완료');
@@ -52,21 +47,17 @@ function initializeFirebase() {
 
 // 회원가입
 async function signUp(email, password, name, nickname) {
-  if (!initializeFirebase()) return { success: false, error: 'Firebase 초기화에 실패했습니다. 잠시 후 다시 시도해주세요.' };
+  if (!initializeFirebase()) throw new Error('Firebase 초기화 실패');
 
   try {
     const userCredential = await firebaseAuth.createUserWithEmailAndPassword(email, password);
     const user = userCredential.user;
 
     // 프로필 업데이트 (닉네임을 displayName으로 사용)
-    try {
-      await user.updateProfile({ displayName: nickname });
-    } catch (profileError) {
-      console.warn('[Firebase] 프로필 업데이트 실패:', profileError.message);
-    }
+    await user.updateProfile({ displayName: nickname });
 
-    // Firestore에 사용자 정보 저장 (최대 3회 재시도)
-    const userData = {
+    // Firestore에 사용자 정보 저장
+    await firebaseDb.collection('users').doc(user.uid).set({
       email: email,
       name: name,
       nickname: nickname,
@@ -76,22 +67,7 @@ async function signUp(email, password, name, nickname) {
       plan: 'free',
       usageCount: 0,
       isActive: true
-    };
-    let firestoreSaved = false;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        await firebaseDb.collection('users').doc(user.uid).set(userData);
-        firestoreSaved = true;
-        console.log('[Firebase] Firestore 사용자 정보 저장 성공 (시도 ' + (attempt + 1) + ')');
-        break;
-      } catch (firestoreError) {
-        console.warn('[Firebase] Firestore 저장 실패 (시도 ' + (attempt + 1) + '):', firestoreError.message);
-        if (attempt < 2) await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
-      }
-    }
-    if (!firestoreSaved) {
-      console.error('[Firebase] Firestore 사용자 정보 저장 최종 실패 - UID:', user.uid);
-    }
+    });
 
     return { success: true, user: user };
   } catch (error) {
@@ -102,44 +78,16 @@ async function signUp(email, password, name, nickname) {
 
 // 로그인
 async function signIn(email, password) {
-  if (!initializeFirebase()) return { success: false, error: 'Firebase 초기화에 실패했습니다. 잠시 후 다시 시도해주세요.' };
+  if (!initializeFirebase()) throw new Error('Firebase 초기화 실패');
 
   try {
     const userCredential = await firebaseAuth.signInWithEmailAndPassword(email, password);
     const user = userCredential.user;
 
-    // Firestore 문서 확인 및 업데이트 (최대 2회 재시도)
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const userDoc = await firebaseDb.collection('users').doc(user.uid).get();
-        if (userDoc.exists) {
-          // 기존 문서 → 로그인 시간만 업데이트
-          await firebaseDb.collection('users').doc(user.uid).update({
-            lastLoginAt: firebase.firestore.FieldValue.serverTimestamp()
-          });
-        } else {
-          // 문서 없음 → 회원가입 때 Firestore 저장이 실패한 경우 → 자동 생성
-          console.log('[Firebase] 유저 문서 없음, 자동 생성:', user.uid);
-          await firebaseDb.collection('users').doc(user.uid).set({
-            email: user.email,
-            name: user.displayName || user.email.split('@')[0],
-            nickname: user.displayName || user.email.split('@')[0],
-            displayName: user.displayName || user.email.split('@')[0],
-            plan: 'free',
-            planExpiry: null,
-            createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-            lastLoginAt: firebase.firestore.FieldValue.serverTimestamp(),
-            usageCount: 0,
-            isActive: true
-          });
-        }
-        console.log('[Firebase] Firestore 로그인 업데이트 성공 (시도 ' + (attempt + 1) + ')');
-        break;
-      } catch (firestoreError) {
-        console.warn('[Firebase] Firestore 업데이트 실패 (시도 ' + (attempt + 1) + '):', firestoreError.message);
-        if (attempt < 1) await new Promise(r => setTimeout(r, 1000));
-      }
-    }
+    // 마지막 로그인 시간 업데이트
+    await firebaseDb.collection('users').doc(user.uid).update({
+      lastLoginAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
 
     return { success: true, user: user };
   } catch (error) {
@@ -150,7 +98,7 @@ async function signIn(email, password) {
 
 // 로그아웃
 async function signOut() {
-  if (!initializeFirebase()) return { success: false, error: 'Firebase 초기화 실패' };
+  if (!initializeFirebase()) throw new Error('Firebase 초기화 실패');
 
   try {
     await firebaseAuth.signOut();
@@ -175,7 +123,7 @@ function onAuthStateChanged(callback) {
 
 // 비밀번호 재설정 이메일 전송
 async function sendPasswordReset(email) {
-  if (!initializeFirebase()) return { success: false, error: 'Firebase 초기화에 실패했습니다.' };
+  if (!initializeFirebase()) throw new Error('Firebase 초기화 실패');
 
   try {
     await firebaseAuth.sendPasswordResetEmail(email);
@@ -190,7 +138,7 @@ async function sendPasswordReset(email) {
 
 // 사용자 정보 가져오기
 async function getUserData(uid) {
-  if (!initializeFirebase()) return { success: false, error: 'Firebase 초기화 실패' };
+  if (!initializeFirebase()) throw new Error('Firebase 초기화 실패');
 
   try {
     const doc = await firebaseDb.collection('users').doc(uid).get();
@@ -318,110 +266,25 @@ function getErrorMessage(errorCode) {
     'auth/user-disabled': '비활성화된 계정입니다.',
     'auth/user-not-found': '등록되지 않은 이메일입니다.',
     'auth/wrong-password': '비밀번호가 올바르지 않습니다.',
-    'auth/invalid-credential': '이메일 또는 비밀번호가 올바르지 않습니다.',
-    'auth/invalid-login-credentials': '이메일 또는 비밀번호가 올바르지 않습니다.',
     'auth/too-many-requests': '너무 많은 요청입니다. 잠시 후 다시 시도해주세요.',
-    'auth/network-request-failed': '네트워크 오류가 발생했습니다.',
-    'auth/popup-closed-by-user': '로그인이 취소되었습니다.',
-    'auth/internal-error': '서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요.'
+    'auth/network-request-failed': '네트워크 오류가 발생했습니다.'
   };
-  return messages[errorCode] || `오류가 발생했습니다. (${errorCode || 'unknown'})`;
+  return messages[errorCode] || '오류가 발생했습니다.';
 }
 
 // 로그인 상태를 Chrome Storage에 동기화
 async function syncAuthState() {
   const user = getCurrentUser();
   if (user) {
-    console.log('[syncAuthState] 시작 - uid:', user.uid, 'email:', user.email);
+    const userData = await getUserData(user.uid);
 
-    // 기존 저장된 플랜을 먼저 읽어서, Firestore 조회 실패 시 보존
-    let existingPlan = 'free';
-    try {
-      const existing = await chrome.storage.local.get(['userInfo']);
-      if (existing.userInfo && existing.userInfo.plan) {
-        existingPlan = existing.userInfo.plan;
-      }
-    } catch (e) { /* ignore */ }
-    console.log('[syncAuthState] 기존 플랜:', existingPlan);
-
-    // ID 토큰 가져오기 (최대 2번 시도)
+    // ID 토큰 가져와서 저장 (서비스 워커에서 Firebase API 호출용)
     let idToken = null;
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        idToken = await user.getIdToken(attempt > 0); // 두 번째 시도에서 force refresh
-        if (idToken) {
-          console.log('[syncAuthState] ID 토큰 획득 (시도 ' + (attempt + 1) + ')');
-          break;
-        }
-      } catch (tokenError) {
-        console.warn('[syncAuthState] ID 토큰 가져오기 실패 (시도 ' + (attempt + 1) + '):', tokenError.message);
-      }
-    }
-
-    // 방법 1: Firebase SDK로 플랜 읽기
-    let plan = existingPlan;
-    let planFetched = false;
     try {
-      const userData = await getUserData(user.uid);
-      if (userData.success && userData.data) {
-        plan = userData.data.plan || 'free';
-        planFetched = true;
-        console.log('[syncAuthState] SDK 플랜 확인:', plan);
-      } else {
-        // Firestore 문서가 없으면 자동 생성 (회원가입 시 저장 실패한 경우 복구)
-        console.warn('[syncAuthState] Firestore 유저 문서 없음, 자동 생성 시도:', user.uid);
-        try {
-          await firebaseDb.collection('users').doc(user.uid).set({
-            email: user.email,
-            name: user.displayName || user.email.split('@')[0],
-            nickname: user.displayName || user.email.split('@')[0],
-            displayName: user.displayName || user.email.split('@')[0],
-            plan: 'free',
-            planExpiry: null,
-            createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-            lastLoginAt: firebase.firestore.FieldValue.serverTimestamp(),
-            usageCount: 0,
-            isActive: true
-          });
-          plan = 'free';
-          planFetched = true;
-          console.log('[syncAuthState] Firestore 유저 문서 자동 생성 완료');
-        } catch (createError) {
-          console.error('[syncAuthState] Firestore 유저 문서 자동 생성 실패:', createError.message);
-        }
-      }
-    } catch (e) {
-      console.warn('[syncAuthState] SDK 플랜 조회 실패:', e.message);
+      idToken = await user.getIdToken(true);
+    } catch (tokenError) {
+      console.error('[Firebase] ID 토큰 가져오기 실패:', tokenError);
     }
-
-    // 방법 2: SDK 실패 시 REST API로 직접 읽기
-    if (!planFetched && idToken) {
-      try {
-        const projectId = firebaseConfig.projectId;
-        const restUrl = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/users/${user.uid}`;
-        const resp = await fetch(restUrl, {
-          headers: { 'Authorization': 'Bearer ' + idToken }
-        });
-        console.log('[syncAuthState] REST API 응답:', resp.status);
-        if (resp.ok) {
-          const doc = await resp.json();
-          if (doc.fields && doc.fields.plan && doc.fields.plan.stringValue) {
-            plan = doc.fields.plan.stringValue;
-            planFetched = true;
-            console.log('[syncAuthState] REST API 플랜 확인:', plan);
-          } else {
-            console.warn('[syncAuthState] REST API 응답에 plan 필드 없음:', JSON.stringify(doc.fields ? Object.keys(doc.fields) : 'no fields'));
-          }
-        } else {
-          const errText = await resp.text().catch(() => '');
-          console.warn('[syncAuthState] REST API 실패: status', resp.status, errText.substring(0, 200));
-        }
-      } catch (e) {
-        console.warn('[syncAuthState] REST API 오류:', e.message);
-      }
-    }
-
-    console.log('[syncAuthState] 최종 플랜:', plan, '(fetched:', planFetched, ', token:', idToken ? '있음' : '없음', ')');
 
     await chrome.storage.local.set({
       isLoggedIn: true,
@@ -429,22 +292,15 @@ async function syncAuthState() {
         uid: user.uid,
         email: user.email,
         displayName: user.displayName,
-        plan: plan
+        plan: userData.data?.plan || 'free'
       },
-      firebaseIdToken: idToken,
-      firebaseRefreshToken: user.refreshToken || null,
-      firebaseTokenTimestamp: Date.now()
+      firebaseIdToken: idToken
     });
-
-    console.log('[syncAuthState] 저장 완료');
   } else {
-    console.log('[syncAuthState] 로그아웃 상태');
     await chrome.storage.local.set({
       isLoggedIn: false,
       userInfo: null,
-      firebaseIdToken: null,
-      firebaseRefreshToken: null,
-      firebaseTokenTimestamp: null
+      firebaseIdToken: null
     });
   }
 }
@@ -455,11 +311,7 @@ async function refreshIdToken() {
   if (user) {
     try {
       const idToken = await user.getIdToken(true);
-      await chrome.storage.local.set({
-        firebaseIdToken: idToken,
-        firebaseRefreshToken: user.refreshToken || null,
-        firebaseTokenTimestamp: Date.now()
-      });
+      await chrome.storage.local.set({ firebaseIdToken: idToken });
       return idToken;
     } catch (error) {
       console.error('[Firebase] 토큰 갱신 실패:', error);

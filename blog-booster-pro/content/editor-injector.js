@@ -388,23 +388,8 @@ const BlogEditorInjector = {
 
       console.log(`[EditorInjector] 타이핑 시작: 총 ${total}자`);
 
-      // 에디터 포커스 및 안정화 (SmartEditor 내부 처리 대기)
+      // 에디터에 포커스
       editor.focus();
-      await this.delay(300);
-
-      // 커서 위치 재확인 (에디터 끝으로)
-      try {
-        const selection = doc.getSelection();
-        const range = doc.createRange();
-        range.selectNodeContents(editor);
-        range.collapse(false);
-        selection.removeAllRanges();
-        selection.addRange(range);
-      } catch (e) {}
-
-      // 에디터 클릭으로 한번 더 활성화
-      editor.focus();
-      await this.delay(200);
 
       // 한 글자씩 타이핑
       for (const char of processed) {

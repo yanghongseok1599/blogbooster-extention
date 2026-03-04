@@ -39,7 +39,7 @@
       <div class="user-info-box">
         <div class="user-name" id="userName">사용자</div>
         <div class="user-email" id="userEmail">email@example.com</div>
-        <div class="user-plan" id="userPlan"><span class="plan-badge free">일반 플랜</span></div>
+        <div class="user-plan" id="userPlan"><span class="plan-badge free">무료 플랜</span></div>
       </div>
       <button class="mypage-btn" id="mypageBtn">👤 마이페이지</button>
       <button class="admin-btn" id="adminBtn" style="display: none;">⚙️ 관리자 페이지</button>
@@ -103,45 +103,11 @@
           <span id="summaryImageCount">-</span>장
         </div>
       </div>
-      <!-- SEO 점수 상세 (NaverSEOAnalyzer v2.0) -->
+      <!-- SEO 점수 상세 -->
       <div class="seo-detail" id="seoDetail" style="display: none;">
         <div class="seo-detail-title">📊 SEO 점수 상세</div>
         <div class="seo-factors" id="seoFactors">
-          <div class="seo-factor" data-factor="firstParagraph">
-            <span class="factor-icon" id="factorIcon0">-</span>
-            <span class="factor-name">첫 문단 품질</span>
-            <span class="factor-score" id="factorScore0">0/20</span>
-          </div>
-          <div class="seo-factor" data-factor="structure">
-            <span class="factor-icon" id="factorIcon1">-</span>
-            <span class="factor-name">콘텐츠 구조</span>
-            <span class="factor-score" id="factorScore1">0/20</span>
-          </div>
-          <div class="seo-factor" data-factor="fire">
-            <span class="factor-icon" id="factorIcon2">-</span>
-            <span class="factor-name">FIRE 공식</span>
-            <span class="factor-score" id="factorScore2">0/20</span>
-          </div>
-          <div class="seo-factor" data-factor="title">
-            <span class="factor-icon" id="factorIcon3">-</span>
-            <span class="factor-name">제목 최적화</span>
-            <span class="factor-score" id="factorScore3">0/15</span>
-          </div>
-          <div class="seo-factor" data-factor="images">
-            <span class="factor-icon" id="factorIcon4">-</span>
-            <span class="factor-name">이미지 활용</span>
-            <span class="factor-score" id="factorScore4">0/10</span>
-          </div>
-          <div class="seo-factor" data-factor="credibility">
-            <span class="factor-icon" id="factorIcon5">-</span>
-            <span class="factor-name">신뢰성 요소</span>
-            <span class="factor-score" id="factorScore5">0/10</span>
-          </div>
-          <div class="seo-factor" data-factor="tags">
-            <span class="factor-icon" id="factorIcon6">-</span>
-            <span class="factor-name">태그</span>
-            <span class="factor-score" id="factorScore6">0/5</span>
-          </div>
+          <!-- NaverSEOAnalyzer 결과로 동적 렌더링 -->
         </div>
       </div>
     </div>
@@ -555,7 +521,6 @@
     </div>
   </div>
 
-  <script src="../lib/naver-seo-analyzer.js"></script>
   <script src="../lib/learning-engine.js"></script>
   <script src="panel.js"></script>
 </body>

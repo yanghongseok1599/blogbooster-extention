@@ -10,181 +10,18 @@ importScripts('../lib/env-config.js');
 // 관리자 이메일 (env-config.js에서 로드)
 const ADMIN_EMAIL = ENV_CONFIG.adminEmail;
 
-const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
-const DEFAULT_GEMINI_API_KEY = 'AIzaSyBTkLbVrVB6ucdiGiQNuGeWbqOsFHBecp4';
+// Gemini 모델 엔드포인트 (주 모델 + 폴백 모델)
+const GEMINI_MODELS = [
+  'gemini-2.5-flash',
+  'gemini-2.0-flash'
+];
+const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
+const GEMINI_ENDPOINT = `${GEMINI_BASE_URL}/${GEMINI_MODELS[0]}:generateContent`;
+const DEFAULT_GEMINI_API_KEY = 'AIzaSyCKctz6m74jqSKH21tqwfOECrqUMtO7DjU';
 
-// ==================== API 키 로테이션 ====================
-const blockedApiKeys = new Map(); // key → 차단 시각 (30분 TTL)
-let rotationIndex = 0;
-
-/**
- * 공용 API 키 로테이션으로 선택
- * geminiApiKeys 배열에서 라운드로빈 + 429 블랙리스트 회피
- */
-async function getRotatedGeminiApiKey(apiKeys) {
-  if (!apiKeys || apiKeys.length === 0) return null;
-
-  const now = Date.now();
-  const BLOCK_DURATION = 30 * 60 * 1000; // 30분
-
-  // 만료된 블랙리스트 정리
-  for (const [key, blockedAt] of blockedApiKeys) {
-    if (now - blockedAt > BLOCK_DURATION) blockedApiKeys.delete(key);
-  }
-
-  // 사용 가능한 키 찾기 (라운드로빈)
-  for (let i = 0; i < apiKeys.length; i++) {
-    const idx = (rotationIndex + i) % apiKeys.length;
-    const key = apiKeys[idx];
-    if (!blockedApiKeys.has(key)) {
-      rotationIndex = (idx + 1) % apiKeys.length;
-      console.log(`[API 로테이션] 키 #${idx + 1}/${apiKeys.length} 선택`);
-      return key;
-    }
-  }
-
-  console.log('[API 로테이션] ❌ 모든 키 차단됨');
-  return null;
-}
-
-/**
- * 429 에러 시 해당 키를 블랙리스트에 추가
- */
-function blockApiKey(apiKey) {
-  blockedApiKeys.set(apiKey, Date.now());
-  console.log(`[API 로테이션] 키 차단됨 (30분), 현재 차단: ${blockedApiKeys.size}개`);
-}
-
-// ==================== 일일 사용 제한 ====================
-const DEFAULT_DAILY_LIMIT = 10;
-
-/**
- * 공용 키 사용 시 일일 사용량 체크 및 증가
- * @returns {{ allowed: boolean, error?: string, remaining?: number }}
- */
-async function checkAndIncrementUsage() {
-  try {
-    const userResult = await chrome.storage.local.get(['userInfo']);
-    const userUid = userResult.userInfo?.uid;
-    if (!userUid) return { allowed: true }; // 유저 정보 없으면 통과
-
-    const token = await getFirebaseIdToken();
-    if (!token) return { allowed: true }; // 토큰 없으면 통과 (폴백)
-
-    // 관리자 설정에서 일일 제한 가져오기
-    let dailyLimit = DEFAULT_DAILY_LIMIT;
-    try {
-      const settingsUrl = `${FIRESTORE_BASE_URL}/settings/apiKeys`;
-      const settingsResp = await fetch(settingsUrl, { headers: { 'Authorization': `Bearer ${token}` } });
-      if (settingsResp.ok) {
-        const settings = firestoreDocToJson(await settingsResp.json());
-        if (settings?.dailyLimit) dailyLimit = settings.dailyLimit;
-      }
-    } catch (e) { /* 기본값 사용 */ }
-
-    // 유저 문서에서 오늘 사용량 확인
-    const userDocUrl = `${FIRESTORE_BASE_URL}/users/${encodeURIComponent(userUid)}`;
-    const resp = await fetch(userDocUrl, { headers: { 'Authorization': `Bearer ${token}` } });
-
-    if (!resp.ok) return { allowed: true }; // 조회 실패 시 통과
-
-    const userData = firestoreDocToJson(await resp.json());
-    const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
-    const dailyUsage = userData?.dailyUsage || {};
-
-    let todayCount = 0;
-    if (dailyUsage.date === today) {
-      todayCount = dailyUsage.count || 0;
-    }
-
-    if (todayCount >= dailyLimit) {
-      return {
-        allowed: false,
-        error: `오늘 사용 횟수(${dailyLimit}회)를 초과했습니다.\n내일 다시 이용해주세요.\n\n개인 API 키를 입력하면 제한 없이 사용할 수 있습니다.`
-      };
-    }
-
-    // 사용량 +1 업데이트
-    const newUsage = { date: today, count: todayCount + 1 };
-    await fetch(userDocUrl + '?updateMask.fieldPaths=dailyUsage', {
-      method: 'PATCH',
-      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(jsonToFirestoreDoc({ dailyUsage: newUsage }))
-    });
-
-    const remaining = dailyLimit - todayCount - 1;
-    console.log(`[사용량] ${todayCount + 1}/${dailyLimit} (남은 횟수: ${remaining})`);
-    return { allowed: true, remaining };
-
-  } catch (e) {
-    console.error('[사용량] 체크 오류:', e.message);
-    return { allowed: true }; // 오류 시 통과 (서비스 중단 방지)
-  }
-}
-
-// ==================== Gemini API 호출 ====================
-
-// Gemini API 재시도 헬퍼 (429 키 로테이션 + 503 대응)
-async function callGeminiWithRetry(apiKey, requestBody, maxRetries = 2) {
-  let lastError = null;
-  let currentKey = apiKey;
-
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      const response = await fetch(`${GEMINI_ENDPOINT}?key=${currentKey}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody)
-      });
-
-      // 429 또는 503이면 키 블랙리스트 + 다른 키로 재시도
-      if ((response.status === 429 || response.status === 503) && attempt < maxRetries) {
-        blockApiKey(currentKey);
-
-        // 다른 공용 키로 전환 시도
-        try {
-          const keysResult = await chrome.storage.local.get(['geminiApiKeys']);
-          const keys = keysResult.geminiApiKeys;
-          if (keys && keys.length > 0) {
-            const nextKey = await getRotatedGeminiApiKey(keys);
-            if (nextKey) {
-              currentKey = nextKey;
-              console.log(`[Gemini] 429 → 다른 키로 즉시 재시도`);
-              continue;
-            }
-          }
-        } catch (e) { /* 키 로테이션 실패 시 기존 방식 대기 */ }
-
-        const waitTime = (attempt + 1) * 5000; // 5초, 10초
-        console.log(`[Gemini] ${response.status} 수신, ${waitTime/1000}초 후 재시도 (${attempt + 1}/${maxRetries})`);
-        await new Promise(r => setTimeout(r, waitTime));
-        continue;
-      }
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(`API 오류: ${response.status} - ${errorData.error?.message || '알 수 없는 오류'}`);
-      }
-
-      const data = await response.json();
-      if (!data.candidates || data.candidates.length === 0) {
-        throw new Error('응답 생성에 실패했습니다. 다시 시도해주세요.');
-      }
-
-      return data.candidates[0].content.parts[0].text;
-    } catch (error) {
-      lastError = error;
-      if (attempt < maxRetries && (error.message.includes('Failed to fetch') || error.message.includes('network'))) {
-        const waitTime = (attempt + 1) * 2000;
-        console.log(`[Gemini] 네트워크 오류, ${waitTime/1000}초 후 재시도 (${attempt + 1}/${maxRetries})`);
-        await new Promise(r => setTimeout(r, waitTime));
-        continue;
-      }
-      throw error;
-    }
-  }
-  throw lastError;
-}
+// Gemini API 키 로테이션
+let _geminiKeyIndex = 0;
+let _geminiKeysCache = [];
 
 // YouTube API 설정
 const YOUTUBE_API_BASE = 'https://www.googleapis.com/youtube/v3';
@@ -432,10 +269,14 @@ async function handleGetGeminiApiKeyAccess(sendResponse) {
 // API 설정 가져오기 (관리자용)
 async function handleGetApiSettings(sendResponse) {
   try {
+    const token = await getFirebaseIdToken();
     const settingsUrl = `${FIRESTORE_BASE_URL}/settings/apiKeys`;
-    const response = await fetchWithTokenRefresh(settingsUrl);
 
-    if (!response || !response.ok) {
+    const response = await fetch(settingsUrl, {
+      headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+    });
+
+    if (!response.ok) {
       sendResponse({ success: false, error: '설정을 찾을 수 없습니다.' });
       return;
     }
@@ -447,8 +288,7 @@ async function handleGetApiSettings(sendResponse) {
       success: true,
       settings: {
         hasApiKey: !!settings?.geminiApiKey,
-        geminiApiKeys: settings?.geminiApiKeys || [],
-        dailyLimit: settings?.dailyLimit || 10,
+        geminiApiKeys: settings?.geminiApiKeys || (settings?.geminiApiKey ? [settings.geminiApiKey] : []),
         freeAccessEnabled: settings?.freeAccessEnabled || false,
         youtubeApiKeys: settings?.youtubeApiKeys || [],
         hasYouTubeApiKeys: !!(settings?.youtubeApiKeys && settings.youtubeApiKeys.length > 0),
@@ -464,49 +304,191 @@ async function handleGetApiSettings(sendResponse) {
 
 async function handleGenerateContent(request, sendResponse) {
   try {
-    // API 키 가져오기 (개인 키 우선 → PRO 공용 키)
-    let key = request.apiKey;
-    let isPersonalKey = !!request.apiKey;
+    // Firebase에서 API 키 가져오기 (구독 확인 포함)
+    let keys = [];
 
-    if (!key) {
-      const keyResult = await getAvailableGeminiApiKey();
-      key = keyResult.apiKey;
-      isPersonalKey = keyResult.isPersonalKey;
+    if (request.apiKey) {
+      keys = [request.apiKey];
+    } else {
+      const apiKeyResult = await getGeminiApiKeyFromFirebase();
+      if (!apiKeyResult.success) {
+        sendResponse({
+          success: false,
+          error: apiKeyResult.error,
+          requireSubscription: apiKeyResult.requireSubscription
+        });
+        return;
+      }
+      keys = apiKeyResult.apiKeys || [apiKeyResult.apiKey];
     }
 
-    if (!key) {
-      sendResponse({
-        success: false,
-        error: '무료 사용자는 마이페이지에서 개인 Gemini API 키를 입력해주세요.\nPRO 구독 시 공용 API를 무제한 사용할 수 있습니다.',
-        requireSubscription: true
-      });
+    if (!keys || keys.length === 0) {
+      sendResponse({ success: false, error: 'API 키가 설정되지 않았습니다.' });
       return;
     }
 
-    // 공용 키 사용 시 일일 사용량 체크
-    if (!isPersonalKey) {
-      const usageCheck = await checkAndIncrementUsage();
-      if (!usageCheck.allowed) {
-        sendResponse({ success: false, error: usageCheck.error });
-        return;
+    // 라운드 로빈 키 로테이션 + 실패 시 자동 다음 키 + 모델 폴백
+    const generationConfig = {
+      temperature: request.temperature || 0.7,
+      maxOutputTokens: request.maxTokens || 4096,
+      topP: 0.8,
+      topK: 40
+    };
+
+    let lastError = null;
+    let allQuotaExhausted = true; // 모든 실패가 할당량인지 추적
+
+    // 모델별로 시도 (주 모델 → 폴백 모델)
+    for (const model of GEMINI_MODELS) {
+      const endpoint = `${GEMINI_BASE_URL}/${model}:generateContent`;
+      const requestBody = JSON.stringify({
+        contents: [{ parts: [{ text: request.prompt }] }],
+        generationConfig
+      });
+
+      for (let attempt = 0; attempt < keys.length; attempt++) {
+        const keyIdx = (_geminiKeyIndex + attempt) % keys.length;
+        const key = keys[keyIdx];
+
+        try {
+          const response = await fetch(`${endpoint}?key=${key}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: requestBody
+          });
+
+          if (response.ok) {
+            const data = await response.json();
+            if (data.candidates && data.candidates.length > 0) {
+              const generatedText = data.candidates[0].content.parts[0].text;
+              _geminiKeyIndex = (keyIdx + 1) % keys.length;
+              console.log(`[Gemini] ${model} 키 #${keyIdx + 1}/${keys.length} 성공`);
+              sendResponse({ success: true, data: generatedText });
+              return;
+            }
+            lastError = new Error('응답 생성에 실패했습니다.');
+            allQuotaExhausted = false;
+          } else {
+            const errorData = await response.json().catch(() => ({}));
+            const errMsg = errorData.error?.message || `HTTP ${response.status}`;
+            console.warn(`[Gemini] ${model} 키 #${keyIdx + 1}/${keys.length} 실패 (${response.status}): ${errMsg}`);
+
+            // 할당량/권한 에러는 다음 키로 재시도
+            const isQuotaError = response.status === 429 || response.status === 400 &&
+              (errMsg.toLowerCase().includes('quota') || errMsg.toLowerCase().includes('rate') || errMsg.toLowerCase().includes('resource'));
+            const isAuthError = response.status === 403;
+
+            if (isQuotaError || isAuthError) {
+              lastError = new Error(errMsg);
+              continue; // 다음 키 시도
+            }
+            // 다른 에러는 재시도 불필요
+            lastError = new Error(errMsg);
+            allQuotaExhausted = false;
+            break;
+          }
+        } catch (fetchErr) {
+          console.warn(`[Gemini] ${model} 키 #${keyIdx + 1}/${keys.length} 네트워크 오류:`, fetchErr.message);
+          lastError = fetchErr;
+          allQuotaExhausted = false;
+          continue;
+        }
       }
+
+      // 이 모델의 모든 키가 할당량 초과면 다음 모델로 폴백
+      if (allQuotaExhausted) {
+        console.log(`[Gemini] ${model} 모든 키 할당량 초과, 다음 모델로 폴백 시도...`);
+        continue;
+      }
+      break; // 할당량 외 에러면 모델 폴백 불필요
     }
 
-    const generatedText = await callGeminiWithRetry(key, {
-      contents: [{ parts: [{ text: request.prompt }] }],
-      generationConfig: {
-        temperature: request.temperature || 0.7,
-        maxOutputTokens: request.maxTokens || 4096,
-        topP: 0.8,
-        topK: 40
+    // 모든 모델+키 실패 — 사용자 친화적 메시지
+    let userMsg;
+    if (allQuotaExhausted) {
+      userMsg = 'API 사용량이 일시적으로 초과되었습니다. 1~2분 후 다시 시도해주세요.';
+    } else {
+      const rawMsg = lastError?.message || '';
+      if (rawMsg.toLowerCase().includes('quota') || rawMsg.includes('429') || rawMsg.toLowerCase().includes('rate')) {
+        userMsg = 'API 사용량이 일시적으로 초과되었습니다. 1~2분 후 다시 시도해주세요.';
+      } else if (rawMsg.includes('403') || rawMsg.toLowerCase().includes('permission') || rawMsg.toLowerCase().includes('forbidden')) {
+        userMsg = 'API 접근 권한 오류가 발생했습니다. 관리자에게 문의해주세요.';
+      } else {
+        userMsg = 'AI 생성에 실패했습니다. 잠시 후 다시 시도해주세요.';
       }
-    });
-
-    sendResponse({ success: true, data: generatedText });
+    }
+    throw new Error(userMsg);
   } catch (error) {
     console.error('[Service Worker] AI 생성 오류:', error);
     sendResponse({ success: false, error: error.message });
   }
+}
+
+/**
+ * Gemini API 호출 공통 헬퍼 (모델 폴백 + 키 로테이션)
+ * YouTube 생성 등에서도 사용
+ */
+async function callGeminiWithFallback(apiKey, prompt, generationConfig) {
+  const keys = Array.isArray(apiKey) ? apiKey : [apiKey];
+  const config = generationConfig || { temperature: 0.7, maxOutputTokens: 8192, topP: 0.8, topK: 40 };
+
+  let lastError = null;
+  for (const model of GEMINI_MODELS) {
+    const endpoint = `${GEMINI_BASE_URL}/${model}:generateContent`;
+    let allQuota = true;
+
+    for (let i = 0; i < keys.length; i++) {
+      const key = keys[i];
+      try {
+        const response = await fetch(`${endpoint}?key=${key}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: config })
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          if (data.candidates && data.candidates.length > 0) {
+            console.log(`[Gemini Helper] ${model} 성공`);
+            return data.candidates[0].content.parts[0].text;
+          }
+          lastError = new Error('응답 생성 실패');
+          allQuota = false;
+        } else {
+          const errorData = await response.json().catch(() => ({}));
+          const errMsg = errorData.error?.message || `HTTP ${response.status}`;
+          console.warn(`[Gemini Helper] ${model} 키 #${i + 1} 실패 (${response.status}): ${errMsg}`);
+
+          const isQuota = response.status === 429 || (response.status === 400 &&
+            (errMsg.toLowerCase().includes('quota') || errMsg.toLowerCase().includes('rate') || errMsg.toLowerCase().includes('resource')));
+          if (isQuota || response.status === 403) {
+            lastError = new Error(errMsg);
+            continue;
+          }
+          lastError = new Error(errMsg);
+          allQuota = false;
+          break;
+        }
+      } catch (fetchErr) {
+        lastError = fetchErr;
+        allQuota = false;
+        continue;
+      }
+    }
+
+    if (allQuota) {
+      console.log(`[Gemini Helper] ${model} 할당량 초과, 다음 모델 시도...`);
+      continue;
+    }
+    break;
+  }
+
+  // 사용자 친화적 메시지 변환
+  const rawMsg = lastError?.message || '';
+  if (rawMsg.toLowerCase().includes('quota') || rawMsg.includes('429') || rawMsg.toLowerCase().includes('rate') || rawMsg.toLowerCase().includes('exceeded')) {
+    throw new Error('API 사용량이 일시적으로 초과되었습니다. 1~2분 후 다시 시도해주세요.');
+  }
+  throw new Error(lastError?.message || 'AI 생성에 실패했습니다.');
 }
 
 async function handleGetApiKey(sendResponse) {
@@ -844,29 +826,14 @@ async function generateBlogFromDescription(videoInfo, apiKey) {
 
 동영상 내용을 유추하여 유익한 정보 글로 작성해주세요.`;
 
-  // API 키 가져오기 (개인 키 우선 → PRO 공용 키)
-  const keyResult = await getAvailableGeminiApiKey();
-  if (!keyResult.apiKey) {
-    throw new Error('무료 사용자는 마이페이지에서 개인 Gemini API 키를 입력해주세요.\nPRO 구독 시 공용 API를 무제한 사용할 수 있습니다.');
+  // Firebase에서 API 키 가져오기 (복수 키 지원)
+  const keyResult = await getGeminiApiKeyFromFirebase().catch(() => null);
+  const geminiKeys = keyResult?.apiKeys || [await getAvailableGeminiApiKey()].filter(Boolean);
+  if (!geminiKeys.length) {
+    throw new Error('Gemini API 키가 설정되지 않았습니다. PRO 구독이 필요할 수 있습니다.');
   }
 
-  // 공용 키 사용 시 일일 사용량 체크
-  if (!keyResult.isPersonalKey) {
-    const usageCheck = await checkAndIncrementUsage();
-    if (!usageCheck.allowed) {
-      throw new Error(usageCheck.error);
-    }
-  }
-
-  return await callGeminiWithRetry(keyResult.apiKey, {
-    contents: [{ parts: [{ text: prompt }] }],
-    generationConfig: {
-      temperature: 0.7,
-      maxOutputTokens: 8192,
-      topP: 0.8,
-      topK: 40
-    }
-  });
+  return await callGeminiWithFallback(geminiKeys, prompt);
 }
 
 // YouTube 자막 크롤링 (비공식 방법 - API 할당량 절약)
@@ -944,29 +911,14 @@ ${transcript.substring(0, 15000)} ${transcript.length > 15000 ? '... (생략됨)
 
 자막의 핵심 내용을 살려서 유익한 블로그 글로 작성해주세요.`;
 
-  // API 키 가져오기 (개인 키 우선 → PRO 공용 키)
-  const keyResult = await getAvailableGeminiApiKey();
-  if (!keyResult.apiKey) {
-    throw new Error('무료 사용자는 마이페이지에서 개인 Gemini API 키를 입력해주세요.\nPRO 구독 시 공용 API를 무제한 사용할 수 있습니다.');
+  // Firebase에서 API 키 가져오기 (복수 키 지원)
+  const keyResult = await getGeminiApiKeyFromFirebase().catch(() => null);
+  const geminiKeys = keyResult?.apiKeys || [await getAvailableGeminiApiKey()].filter(Boolean);
+  if (!geminiKeys.length) {
+    throw new Error('Gemini API 키가 설정되지 않았습니다. PRO 구독이 필요할 수 있습니다.');
   }
 
-  // 공용 키 사용 시 일일 사용량 체크
-  if (!keyResult.isPersonalKey) {
-    const usageCheck = await checkAndIncrementUsage();
-    if (!usageCheck.allowed) {
-      throw new Error(usageCheck.error);
-    }
-  }
-
-  return await callGeminiWithRetry(keyResult.apiKey, {
-    contents: [{ parts: [{ text: prompt }] }],
-    generationConfig: {
-      temperature: 0.7,
-      maxOutputTokens: 8192,
-      topP: 0.8,
-      topK: 40
-    }
-  });
+  return await callGeminiWithFallback(geminiKeys, prompt);
 }
 
 // YouTube → 블로그 변환 메인 핸들러
@@ -1235,29 +1187,14 @@ ${customPrompt}`;
 
 자막의 핵심 내용을 살려서 유익한 블로그 글로 작성해주세요.`;
 
-  // API 키 가져오기 (개인 키 우선 → PRO 공용 키)
-  const keyResult = await getAvailableGeminiApiKey();
-  if (!keyResult.apiKey) {
-    throw new Error('무료 사용자는 마이페이지에서 개인 Gemini API 키를 입력해주세요.\nPRO 구독 시 공용 API를 무제한 사용할 수 있습니다.');
+  // Firebase에서 API 키 가져오기 (복수 키 지원)
+  const keyResult = await getGeminiApiKeyFromFirebase().catch(() => null);
+  const geminiKeys = keyResult?.apiKeys || [await getAvailableGeminiApiKey()].filter(Boolean);
+  if (!geminiKeys.length) {
+    throw new Error('Gemini API 키가 설정되지 않았습니다. PRO 구독이 필요할 수 있습니다.');
   }
 
-  // 공용 키 사용 시 일일 사용량 체크
-  if (!keyResult.isPersonalKey) {
-    const usageCheck = await checkAndIncrementUsage();
-    if (!usageCheck.allowed) {
-      throw new Error(usageCheck.error);
-    }
-  }
-
-  return await callGeminiWithRetry(keyResult.apiKey, {
-    contents: [{ parts: [{ text: prompt }] }],
-    generationConfig: {
-      temperature: 0.7,
-      maxOutputTokens: 8192,
-      topP: 0.8,
-      topK: 40
-    }
-  });
+  return await callGeminiWithFallback(geminiKeys, prompt);
 }
 
 // 동영상 설명으로 블로그 생성 (사용자 추가 요청 포함)
@@ -1291,29 +1228,14 @@ ${customPrompt}`;
 
 동영상 내용을 유추하여 유익한 정보 글로 작성해주세요.`;
 
-  // API 키 가져오기 (개인 키 우선 → PRO 공용 키)
-  const keyResult = await getAvailableGeminiApiKey();
-  if (!keyResult.apiKey) {
-    throw new Error('무료 사용자는 마이페이지에서 개인 Gemini API 키를 입력해주세요.\nPRO 구독 시 공용 API를 무제한 사용할 수 있습니다.');
+  // Firebase에서 API 키 가져오기 (복수 키 지원)
+  const keyResult = await getGeminiApiKeyFromFirebase().catch(() => null);
+  const geminiKeys = keyResult?.apiKeys || [await getAvailableGeminiApiKey()].filter(Boolean);
+  if (!geminiKeys.length) {
+    throw new Error('Gemini API 키가 설정되지 않았습니다. PRO 구독이 필요할 수 있습니다.');
   }
 
-  // 공용 키 사용 시 일일 사용량 체크
-  if (!keyResult.isPersonalKey) {
-    const usageCheck = await checkAndIncrementUsage();
-    if (!usageCheck.allowed) {
-      throw new Error(usageCheck.error);
-    }
-  }
-
-  return await callGeminiWithRetry(keyResult.apiKey, {
-    contents: [{ parts: [{ text: prompt }] }],
-    generationConfig: {
-      temperature: 0.7,
-      maxOutputTokens: 8192,
-      topP: 0.8,
-      topK: 40
-    }
-  });
+  return await callGeminiWithFallback(geminiKeys, prompt);
 }
 
 // YouTube API 키 설정 핸들러 (관리자용 - Firebase에 저장)
@@ -1379,6 +1301,11 @@ async function handleFetchImageAsBase64(url, sendResponse) {
 // YouTube API 키 Firebase에 저장 (관리자용)
 async function saveYouTubeApiKeysToFirebase(keys) {
   try {
+    const token = await getFirebaseIdToken();
+    if (!token) {
+      return { success: false, error: '인증 토큰 없음' };
+    }
+
     // 관리자 확인
     const userResult = await chrome.storage.local.get(['userInfo']);
     const userEmail = userResult.userInfo?.email;
@@ -1391,8 +1318,10 @@ async function saveYouTubeApiKeysToFirebase(keys) {
     // 기존 설정 가져오기
     let existingSettings = {};
     try {
-      const getResponse = await fetchWithTokenRefresh(settingsUrl);
-      if (getResponse && getResponse.ok) {
+      const getResponse = await fetch(settingsUrl, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (getResponse.ok) {
         const doc = await getResponse.json();
         existingSettings = firestoreDocToJson(doc) || {};
       }
@@ -1407,15 +1336,14 @@ async function saveYouTubeApiKeysToFirebase(keys) {
       updatedAt: new Date().toISOString()
     };
 
-    const response = await fetchWithTokenRefresh(settingsUrl, {
+    const response = await fetch(settingsUrl, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
       body: JSON.stringify(jsonToFirestoreDoc(newSettings))
     });
-
-    if (!response) {
-      return { success: false, error: '인증 토큰 없음' };
-    }
 
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
@@ -1433,10 +1361,14 @@ async function saveYouTubeApiKeysToFirebase(keys) {
 // Firebase에서 YouTube API 키 로드
 async function loadYouTubeApiKeysFromFirebase() {
   try {
+    const token = await getFirebaseIdToken();
     const settingsUrl = `${FIRESTORE_BASE_URL}/settings/apiKeys`;
-    const response = await fetchWithTokenRefresh(settingsUrl);
 
-    if (!response || !response.ok) {
+    const response = await fetch(settingsUrl, {
+      headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+    });
+
+    if (!response.ok) {
       return { success: false, error: '설정을 찾을 수 없습니다.' };
     }
 
@@ -1600,109 +1532,15 @@ async function handleGetUserPlan(userId, sendResponse) {
 // Firestore REST API 엔드포인트
 const FIRESTORE_BASE_URL = `https://firestore.googleapis.com/v1/projects/${ENV_CONFIG.firebase.projectId}/databases/(default)/documents`;
 
-// Firebase 인증 토큰 가져오기 (만료 시 자동 갱신)
+// Firebase 인증 토큰 가져오기
 async function getFirebaseIdToken() {
   try {
-    const result = await chrome.storage.local.get(['firebaseIdToken', 'firebaseRefreshToken', 'firebaseTokenTimestamp']);
-
-    // 토큰이 없지만 refreshToken이 있으면 갱신 시도
-    if (!result.firebaseIdToken) {
-      if (result.firebaseRefreshToken) {
-        console.log('[Firebase] ID 토큰 없음, refreshToken으로 갱신 시도...');
-        const newToken = await refreshFirebaseTokenWithRestApi(result.firebaseRefreshToken);
-        if (newToken) return newToken;
-      }
-      console.log('[Firebase] 토큰 없음 (refreshToken도 없음)');
-      return null;
-    }
-
-    // 토큰 만료 확인 (50분 = 3000000ms, 1시간 만료 전 여유)
-    const tokenAge = Date.now() - (result.firebaseTokenTimestamp || 0);
-    if (tokenAge > 3000000) {
-      if (result.firebaseRefreshToken) {
-        console.log('[Firebase] 토큰 만료됨, 갱신 시도...');
-        const newToken = await refreshFirebaseTokenWithRestApi(result.firebaseRefreshToken);
-        if (newToken) return newToken;
-      }
-      // 갱신 실패해도 기존 토큰 반환 (만료됐을 수 있지만, 401 시 재시도 로직에서 처리)
-      console.log('[Firebase] 토큰 갱신 실패, 기존 토큰 반환');
-    }
-
-    return result.firebaseIdToken;
+    const result = await chrome.storage.local.get(['firebaseIdToken']);
+    return result.firebaseIdToken || null;
   } catch (error) {
     console.error('[Firebase] 토큰 가져오기 오류:', error);
     return null;
   }
-}
-
-// Firebase REST API로 토큰 갱신 (서비스 워커에서 SDK 사용 불가하므로)
-async function refreshFirebaseTokenWithRestApi(refreshToken) {
-  try {
-    const apiKey = ENV_CONFIG.firebase.apiKey;
-    const response = await fetch(`https://securetoken.googleapis.com/v1/token?key=${apiKey}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        grant_type: 'refresh_token',
-        refresh_token: refreshToken
-      })
-    });
-
-    if (!response.ok) {
-      console.error('[Firebase] 토큰 갱신 실패:', response.status);
-      return null;
-    }
-
-    const data = await response.json();
-    const newIdToken = data.id_token;
-    const newRefreshToken = data.refresh_token;
-
-    // 갱신된 토큰 저장
-    await chrome.storage.local.set({
-      firebaseIdToken: newIdToken,
-      firebaseRefreshToken: newRefreshToken,
-      firebaseTokenTimestamp: Date.now()
-    });
-
-    console.log('[Firebase] 토큰 갱신 성공');
-    return newIdToken;
-  } catch (error) {
-    console.error('[Firebase] REST API 토큰 갱신 오류:', error);
-    return null;
-  }
-}
-
-// 401 발생 시 토큰 갱신 후 재시도하는 fetch 래퍼
-async function fetchWithTokenRefresh(url, options = {}) {
-  let token = await getFirebaseIdToken();
-  if (!token) return null;
-
-  options.headers = { ...options.headers, 'Authorization': `Bearer ${token}` };
-  let response = await fetch(url, options);
-
-  // 401 또는 403이면 강제 토큰 갱신 후 재시도
-  if (response.status === 401 || response.status === 403) {
-    console.log(`[Firebase] ${response.status} 수신, 토큰 강제 갱신 후 재시도...`);
-    const newToken = await forceRefreshToken();
-    if (newToken) {
-      options.headers['Authorization'] = `Bearer ${newToken}`;
-      response = await fetch(url, options);
-    }
-  }
-
-  return response;
-}
-
-// 토큰 강제 갱신 헬퍼
-async function forceRefreshToken() {
-  try {
-    const result = await chrome.storage.local.get(['firebaseRefreshToken']);
-    if (result.firebaseRefreshToken) {
-      const newToken = await refreshFirebaseTokenWithRestApi(result.firebaseRefreshToken);
-      if (newToken) return newToken;
-    }
-  } catch (e) { /* ignore */ }
-  return null;
 }
 
 // ==================== Firebase API 키 관리 ====================
@@ -1714,8 +1552,7 @@ async function forceRefreshToken() {
  */
 async function getGeminiApiKeyFromFirebase() {
   try {
-    let token = await getFirebaseIdToken();
-    console.log('[PlanCheck] 1. 토큰 상태:', token ? '있음' : '없음');
+    const token = await getFirebaseIdToken();
 
     // 1. 사용자 정보 확인
     const userResult = await chrome.storage.local.get(['userInfo', 'isLoggedIn']);
@@ -1723,180 +1560,112 @@ async function getGeminiApiKeyFromFirebase() {
     const userInfo = userResult.userInfo;
 
     if (!isLoggedIn || !userInfo) {
-      console.log('[PlanCheck] 로그인 안됨:', { isLoggedIn, hasUserInfo: !!userInfo });
+      console.log('[Firebase] 로그인 필요');
       return { success: false, error: '로그인이 필요합니다.' };
     }
 
-    console.log('[PlanCheck] 2. 유저정보:', { uid: userInfo.uid, email: userInfo.email, storedPlan: userInfo.plan });
-
-    // 토큰이 없으면 한 번 더 갱신 시도
-    if (!token) {
-      console.log('[PlanCheck] 토큰 없음 → 강제 갱신 시도');
-      token = await forceRefreshToken();
-      console.log('[PlanCheck] 강제 갱신 결과:', token ? '성공' : '실패');
-    }
-
-    // 2. API 키 결정 (Firestore settings 또는 기본 키)
-    let apiKey = DEFAULT_GEMINI_API_KEY;
+    // 2. API 키 결정 (Firestore settings 또는 기본 키) - 복수 키 지원
+    let apiKeys = [DEFAULT_GEMINI_API_KEY];
     let freeAccessEnabled = false;
 
     try {
       const settingsUrl = `${FIRESTORE_BASE_URL}/settings/apiKeys`;
-      let settingsResponse = await fetch(settingsUrl, {
+      const settingsResponse = await fetch(settingsUrl, {
         headers: token ? { 'Authorization': `Bearer ${token}` } : {}
       });
-
-      // 401/403 시 토큰 갱신 후 재시도
-      if ((settingsResponse.status === 401 || settingsResponse.status === 403)) {
-        console.log('[PlanCheck] settings 조회 실패:', settingsResponse.status, '→ 토큰 갱신');
-        token = await forceRefreshToken();
-        if (token) {
-          settingsResponse = await fetch(settingsUrl, { headers: { 'Authorization': `Bearer ${token}` } });
-        }
-      }
 
       if (settingsResponse.ok) {
         const settingsDoc = await settingsResponse.json();
         const settings = firestoreDocToJson(settingsDoc);
-
-        // 다중 키 로테이션: geminiApiKeys 배열 우선
-        if (settings?.geminiApiKeys && settings.geminiApiKeys.length > 0) {
-          // 로컬에 키 목록 캐시 (callGeminiWithRetry에서 429 시 사용)
-          await chrome.storage.local.set({ geminiApiKeys: settings.geminiApiKeys });
-          const rotatedKey = await getRotatedGeminiApiKey(settings.geminiApiKeys);
-          if (rotatedKey) {
-            apiKey = rotatedKey;
-          } else if (settings.geminiApiKey) {
-            apiKey = settings.geminiApiKey; // 모든 키 차단 시 단일 키 폴백
-          }
-        } else if (settings?.geminiApiKey) {
-          apiKey = settings.geminiApiKey;
+        // geminiApiKeys (배열) 우선, geminiApiKey (단일) 폴백
+        if (settings && settings.geminiApiKeys && Array.isArray(settings.geminiApiKeys) && settings.geminiApiKeys.length > 0) {
+          apiKeys = settings.geminiApiKeys.filter(k => k && k.length > 10);
+        } else if (settings && settings.geminiApiKey) {
+          apiKeys = [settings.geminiApiKey];
         }
-
         freeAccessEnabled = settings?.freeAccessEnabled || false;
-        console.log('[PlanCheck] settings 조회 성공, freeAccess:', freeAccessEnabled);
       }
     } catch (e) {
-      console.log('[PlanCheck] API 설정 조회 실패:', e.message);
+      console.log('[Firebase] API 설정 조회 실패, 기본 키 사용');
     }
 
-    // 3. 접근 권한 확인
+    // 3. 접근 권한 확인 - Firestore에서 유저 플랜 직접 확인
+    const userEmail = userInfo.email;
     const userUid = userInfo.uid;
     let hasActivePlan = false;
-    const storedPlan = userInfo.plan || 'free';
 
-    // 3-1. Firestore에서 최신 플랜 확인 (UID로 조회)
-    if (userUid) {
-      // 토큰이 없으면 마지막으로 한 번 더 시도
-      if (!token) {
-        token = await forceRefreshToken();
-      }
+    // 3-1. Firestore users 컬렉션에서 플랜 확인 (이메일 → UID 순서로 시도)
+    const idsToTry = [userEmail, userUid].filter(Boolean);
+    for (const docId of idsToTry) {
+      if (hasActivePlan) break;
+      try {
+        const userDocUrl = `${FIRESTORE_BASE_URL}/users/${encodeURIComponent(docId)}`;
+        const userDocResponse = await fetch(userDocUrl, {
+          headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+        });
 
-      if (token) {
-        try {
-          const userDocUrl = `${FIRESTORE_BASE_URL}/users/${encodeURIComponent(userUid)}`;
-          console.log('[PlanCheck] 3-1. Firestore 조회 시작:', userDocUrl);
-          let resp = await fetch(userDocUrl, { headers: { 'Authorization': `Bearer ${token}` } });
-          console.log('[PlanCheck] 3-1. 응답 상태:', resp.status);
+        if (userDocResponse.ok) {
+          const userDoc = await userDocResponse.json();
+          const userData = firestoreDocToJson(userDoc);
+          if (userData) {
+            const plan = userData.plan || 'free';
+            // planExpiry는 Firestore Timestamp 또는 Date 문자열일 수 있음
+            let expiresAt = 0;
+            const rawExpiry = userData.planExpiry || userData.planExpiresAt || userData.expiresAt;
+            if (rawExpiry) {
+              if (typeof rawExpiry === 'number') expiresAt = rawExpiry;
+              else if (rawExpiry.seconds) expiresAt = rawExpiry.seconds * 1000;
+              else if (typeof rawExpiry === 'string') expiresAt = new Date(rawExpiry).getTime();
+            }
+            const now = Date.now();
 
-          // 401/403 → 토큰 갱신 후 재시도
-          if (resp.status === 401 || resp.status === 403) {
-            console.log('[PlanCheck] 3-1. 인증 실패 → 토큰 갱신 재시도');
-            token = await forceRefreshToken();
-            if (token) {
-              resp = await fetch(userDocUrl, { headers: { 'Authorization': `Bearer ${token}` } });
-              console.log('[PlanCheck] 3-1. 재시도 응답:', resp.status);
+            if (plan !== 'free' && expiresAt > now) {
+              hasActivePlan = true;
+              const daysLeft = Math.ceil((expiresAt - now) / (24 * 60 * 60 * 1000));
+              console.log(`[Firebase] Firestore 유료 플랜 확인: ${plan} (${daysLeft}일 남음) [docId: ${docId}]`);
             }
           }
-
-          if (resp.ok) {
-            const rawDoc = await resp.json();
-            const userData = firestoreDocToJson(rawDoc);
-            console.log('[PlanCheck] 3-1. Firestore 유저 데이터:', userData ? { plan: userData.plan, planExpiry: userData.planExpiry } : 'null');
-
-            if (userData) {
-              const plan = userData.plan || 'free';
-              let expiresAt = 0;
-              const rawExpiry = userData.planExpiry || userData.planExpiresAt || userData.expiresAt;
-
-              if (rawExpiry) {
-                if (typeof rawExpiry === 'number') expiresAt = rawExpiry;
-                else if (rawExpiry.seconds) expiresAt = rawExpiry.seconds * 1000;
-                else if (typeof rawExpiry === 'string') expiresAt = new Date(rawExpiry).getTime();
-              }
-
-              // storage 플랜을 Firestore 최신값으로 동기화
-              if (plan !== storedPlan) {
-                console.log('[PlanCheck] 3-1. 플랜 동기화:', storedPlan, '→', plan);
-                try {
-                  const s = await chrome.storage.local.get(['userInfo']);
-                  if (s.userInfo) { s.userInfo.plan = plan; await chrome.storage.local.set({ userInfo: s.userInfo }); }
-                } catch (e) { /* ignore */ }
-              }
-
-              const now = Date.now();
-              if (plan !== 'free' && (!expiresAt || expiresAt > now)) {
-                hasActivePlan = true;
-                console.log(`[PlanCheck] 3-1. ✅ 유료 플랜 확인: ${plan}, 만료: ${expiresAt ? new Date(expiresAt).toISOString() : '없음'}`);
-              } else if (plan !== 'free' && expiresAt && expiresAt <= now) {
-                // 만료 → storage도 free로
-                try {
-                  const s = await chrome.storage.local.get(['userInfo']);
-                  if (s.userInfo) { s.userInfo.plan = 'free'; await chrome.storage.local.set({ userInfo: s.userInfo }); }
-                } catch (e) { /* ignore */ }
-                console.log('[PlanCheck] 3-1. ❌ 플랜 만료:', new Date(expiresAt).toISOString());
-              } else {
-                console.log('[PlanCheck] 3-1. 무료 플랜:', plan);
-              }
-            }
-          } else {
-            console.log('[PlanCheck] 3-1. Firestore 조회 실패 (status:', resp.status, ')');
-          }
-        } catch (e) {
-          console.log('[PlanCheck] 3-1. Firestore 조회 오류:', e.message);
         }
-      } else {
-        console.log('[PlanCheck] 3-1. 건너뜀 (토큰 없음)');
+      } catch (e) {
+        console.log(`[Firebase] Firestore 유저 문서 조회 실패 [docId: ${docId}]`);
       }
     }
 
-    // 3-2. Firestore 조회 실패/불가 시 → storage에 저장된 플랜으로 판단
-    if (!hasActivePlan && storedPlan !== 'free') {
-      hasActivePlan = true;
-      console.log(`[PlanCheck] 3-2. ✅ 저장된 플랜으로 접근 허용: ${storedPlan}`);
-    }
-
-    // 3-3. 로컬 userPlans 폴백 (프로모 코드)
+    // 3-2. 로컬 userPlans 폴백 (프로모 코드로 활성화한 경우)
     if (!hasActivePlan) {
       const plansResult = await chrome.storage.local.get(['userPlans']);
       const userPlans = plansResult.userPlans || {};
-      const planData = userPlans[userUid] || userPlans[userInfo.email];
+      const planData = userPlans[userUid];
       const now = Date.now();
       if (planData && planData.expiresAt > now) {
         hasActivePlan = true;
-        console.log('[PlanCheck] 3-3. ✅ 로컬 플랜으로 접근 허용');
+        const daysLeft = Math.ceil((planData.expiresAt - now) / (24 * 60 * 60 * 1000));
+        console.log(`[Firebase] 로컬 유료 플랜 확인 (${daysLeft}일 남음)`);
       }
     }
 
+    // 유료 플랜이 활성 상태이거나 무료 접근이 허용된 경우
     if (hasActivePlan || freeAccessEnabled) {
-      console.log('[PlanCheck] ✅ 최종: 접근 허용 (hasActivePlan:', hasActivePlan, ', freeAccess:', freeAccessEnabled, ')');
-      return { success: true, apiKey };
+      console.log(`[Firebase] API 키 접근 허용 (${apiKeys.length}개 키):`, hasActivePlan ? '유료 플랜' : '무료 접근 허용됨');
+      _geminiKeysCache = apiKeys;
+      return { success: true, apiKey: apiKeys[0], apiKeys };
     }
 
-    console.log('[PlanCheck] ❌ 최종: PRO 구독 필요 (storedPlan:', storedPlan, ', token:', token ? '있음' : '없음', ')');
-    return { success: false, error: '무료 사용자는 마이페이지에서 개인 Gemini API 키를 입력해주세요.\nPRO 구독 시 공용 API를 무제한 사용할 수 있습니다.', requireSubscription: true };
+    // 유료 플랜이 만료되었거나 없는 경우
+    return {
+      success: false,
+      error: 'PRO 구독이 필요한 기능입니다.',
+      requireSubscription: true
+    };
 
   } catch (error) {
-    console.error('[PlanCheck] 오류:', error);
+    console.error('[Firebase] API 키 가져오기 오류:', error);
 
-    // 최후 방어: 오류 발생해도 storage에 유료 플랜이면 허용
-    try {
-      const fb = await chrome.storage.local.get(['userInfo']);
-      if (fb.userInfo && fb.userInfo.plan && fb.userInfo.plan !== 'free') {
-        console.log('[PlanCheck] 오류 폴백: 저장된 유료 플랜으로 허용:', fb.userInfo.plan);
-        return { success: true, apiKey: DEFAULT_GEMINI_API_KEY };
-      }
-    } catch (e) { /* ignore */ }
+    // 오류 시 로컬 스토리지 폴백
+    const localResult = await chrome.storage.local.get(['serverGeminiApiKey']);
+    if (localResult.serverGeminiApiKey) {
+      return { success: true, apiKey: localResult.serverGeminiApiKey, apiKeys: [localResult.serverGeminiApiKey] };
+    }
 
     return { success: false, error: error.message };
   }
@@ -1904,32 +1673,28 @@ async function getGeminiApiKeyFromFirebase() {
 
 /**
  * Gemini API 키 가져오기 (통합 함수)
- * 1. 개인 API 키 있으면 → 무조건 개인 키 (PRO/무료 모두)
- * 2. 개인 키 없음 + PRO → 공용 API 키
- * 3. 개인 키 없음 + 무료 → null (에러)
- *
- * @returns {{ apiKey: string|null, isPersonalKey: boolean }}
+ * Firebase 우선, 실패 시 로컬 폴백
  */
 async function getAvailableGeminiApiKey() {
-  // 1. 개인 API 키 최우선 (PRO든 무료든)
-  try {
-    const personalResult = await chrome.storage.sync.get(['geminiApiKey']);
-    if (personalResult.geminiApiKey) {
-      console.log('[API] 개인 API 키 사용');
-      return { apiKey: personalResult.geminiApiKey, isPersonalKey: true };
-    }
-  } catch (e) { /* ignore */ }
-
-  // 2. 개인 키 없으면 → PRO만 공용 키
+  // 1. Firebase에서 가져오기 시도
   const firebaseResult = await getGeminiApiKeyFromFirebase();
   if (firebaseResult.success) {
-    console.log('[API] PRO 구독 → 공용 API 키 사용');
-    return { apiKey: firebaseResult.apiKey, isPersonalKey: false };
+    return firebaseResult.apiKey;
   }
 
-  // 3. 개인 키도 없고 PRO도 아님
-  console.log('[API] ❌ 개인 API 키 없음 + PRO 구독 없음');
-  return { apiKey: null, isPersonalKey: false };
+  // 2. 구독 필요 에러인 경우 null 반환 (에러 전파)
+  if (firebaseResult.requireSubscription) {
+    return null;
+  }
+
+  // 3. 개인 API 키 폴백 (사용자가 직접 설정한 경우)
+  const syncResult = await chrome.storage.sync.get(['geminiApiKey']);
+  if (syncResult.geminiApiKey) {
+    return syncResult.geminiApiKey;
+  }
+
+  // 4. 기본 API 키 폴백
+  return DEFAULT_GEMINI_API_KEY;
 }
 
 /**
@@ -1937,6 +1702,11 @@ async function getAvailableGeminiApiKey() {
  */
 async function saveApiKeyToFirebase(apiKey, options = {}) {
   try {
+    const token = await getFirebaseIdToken();
+    if (!token) {
+      return { success: false, error: '인증 토큰 없음' };
+    }
+
     // 관리자 확인
     const userResult = await chrome.storage.local.get(['userInfo']);
     const userEmail = userResult.userInfo?.email;
@@ -1949,8 +1719,10 @@ async function saveApiKeyToFirebase(apiKey, options = {}) {
     // 기존 설정 가져오기
     let existingSettings = {};
     try {
-      const getResponse = await fetchWithTokenRefresh(settingsUrl);
-      if (getResponse && getResponse.ok) {
+      const getResponse = await fetch(settingsUrl, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (getResponse.ok) {
         const doc = await getResponse.json();
         existingSettings = firestoreDocToJson(doc) || {};
       }
@@ -1961,34 +1733,23 @@ async function saveApiKeyToFirebase(apiKey, options = {}) {
     // 설정 업데이트
     const newSettings = {
       ...existingSettings,
+      geminiApiKey: apiKey,
       freeAccessEnabled: options.freeAccessEnabled ?? existingSettings.freeAccessEnabled ?? false,
       updatedAt: new Date().toISOString()
     };
-
-    // API 키 (null이 아닌 경우만 업데이트)
-    if (apiKey) {
-      newSettings.geminiApiKey = apiKey;
-    }
-
-    // 다중 Gemini API 키 배열
-    if (options.geminiApiKeys) {
+    // 복수 키 배열 저장
+    if (options.geminiApiKeys && Array.isArray(options.geminiApiKeys)) {
       newSettings.geminiApiKeys = options.geminiApiKeys;
     }
 
-    // 일일 사용 제한
-    if (options.dailyLimit !== undefined) {
-      newSettings.dailyLimit = options.dailyLimit;
-    }
-
-    const response = await fetchWithTokenRefresh(settingsUrl, {
+    const response = await fetch(settingsUrl, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
       body: JSON.stringify(jsonToFirestoreDoc(newSettings))
     });
-
-    if (!response) {
-      return { success: false, error: '인증 토큰 없음' };
-    }
 
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
@@ -2067,13 +1828,16 @@ function toFirestoreValue(value) {
 // 학습 데이터 로드 (Firebase)
 async function handleLoadLearningData(userId, sendResponse) {
   try {
-    const url = `${FIRESTORE_BASE_URL}/users/${userId}/learningData/data`;
-    const response = await fetchWithTokenRefresh(url);
-
-    if (!response) {
+    const token = await getFirebaseIdToken();
+    if (!token) {
       sendResponse({ success: false, error: '인증 토큰 없음' });
       return;
     }
+
+    const url = `${FIRESTORE_BASE_URL}/users/${userId}/learningData/data`;
+    const response = await fetch(url, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
 
     if (!response.ok) {
       if (response.status === 404) {
@@ -2096,18 +1860,22 @@ async function handleLoadLearningData(userId, sendResponse) {
 // 학습 데이터 저장 (Firebase)
 async function handleSaveLearningData(userId, data, sendResponse) {
   try {
-    const url = `${FIRESTORE_BASE_URL}/users/${userId}/learningData/data`;
-    const response = await fetchWithTokenRefresh(url, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(jsonToFirestoreDoc(data))
-    });
-
-    if (!response) {
+    const token = await getFirebaseIdToken();
+    if (!token) {
       // 토큰이 없으면 로컬에만 저장
       sendResponse({ success: true, local: true });
       return;
     }
+
+    const url = `${FIRESTORE_BASE_URL}/users/${userId}/learningData/data`;
+    const response = await fetch(url, {
+      method: 'PATCH',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(jsonToFirestoreDoc(data))
+    });
 
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
@@ -2123,21 +1891,26 @@ async function handleSaveLearningData(userId, data, sendResponse) {
 // 생성된 글 저장 (Firebase)
 async function handleSaveGeneratedPost(userId, postData, sendResponse) {
   try {
+    const token = await getFirebaseIdToken();
+    if (!token) {
+      sendResponse({ success: false, error: '로그인이 필요합니다.' });
+      return;
+    }
+
+    // 컬렉션에 새 문서 추가
     const url = `${FIRESTORE_BASE_URL}/users/${userId}/generatedPosts`;
-    const response = await fetchWithTokenRefresh(url, {
+    const response = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
       body: JSON.stringify(jsonToFirestoreDoc({
         ...postData,
         userId: userId,
         createdAt: new Date().toISOString()
       }))
     });
-
-    if (!response) {
-      sendResponse({ success: false, error: '로그인이 필요합니다.' });
-      return;
-    }
 
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
@@ -2154,10 +1927,20 @@ async function handleSaveGeneratedPost(userId, postData, sendResponse) {
 // 사용자 생성 글 목록 조회 (Firebase)
 async function handleGetGeneratedPosts(userId, limit = 20, sendResponse) {
   try {
+    const token = await getFirebaseIdToken();
+    if (!token) {
+      sendResponse({ success: false, error: '로그인이 필요합니다.' });
+      return;
+    }
+
+    // 구조화된 쿼리로 조회
     const queryUrl = `${FIRESTORE_BASE_URL}:runQuery`;
-    const response = await fetchWithTokenRefresh(queryUrl, {
+    const response = await fetch(queryUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
       body: JSON.stringify({
         structuredQuery: {
           from: [{ collectionId: 'generatedPosts' }],
@@ -2173,11 +1956,6 @@ async function handleGetGeneratedPosts(userId, limit = 20, sendResponse) {
         }
       })
     });
-
-    if (!response) {
-      sendResponse({ success: false, error: '로그인이 필요합니다.' });
-      return;
-    }
 
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
@@ -2201,6 +1979,12 @@ async function handleGetGeneratedPosts(userId, limit = 20, sendResponse) {
 // 모든 사용자 학습 데이터 조회 (관리자용)
 async function handleGetAllUsersLearningData(sendResponse) {
   try {
+    const token = await getFirebaseIdToken();
+    if (!token) {
+      sendResponse({ success: false, error: '로그인이 필요합니다.' });
+      return;
+    }
+
     // 관리자 확인
     const userInfo = await chrome.storage.local.get(['userInfo']);
     if (userInfo.userInfo?.email !== ADMIN_EMAIL) {
@@ -2208,10 +1992,14 @@ async function handleGetAllUsersLearningData(sendResponse) {
       return;
     }
 
+    // collectionGroup 쿼리로 모든 learningData 조회
     const queryUrl = `${FIRESTORE_BASE_URL}:runQuery`;
-    const response = await fetchWithTokenRefresh(queryUrl, {
+    const response = await fetch(queryUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
       body: JSON.stringify({
         structuredQuery: {
           from: [{
@@ -2222,11 +2010,6 @@ async function handleGetAllUsersLearningData(sendResponse) {
         }
       })
     });
-
-    if (!response) {
-      sendResponse({ success: false, error: '로그인이 필요합니다.' });
-      return;
-    }
 
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
@@ -2254,6 +2037,12 @@ async function handleGetAllUsersLearningData(sendResponse) {
 // 모든 생성 글 조회 (관리자용)
 async function handleGetAllGeneratedPosts(limit = 100, sendResponse) {
   try {
+    const token = await getFirebaseIdToken();
+    if (!token) {
+      sendResponse({ success: false, error: '로그인이 필요합니다.' });
+      return;
+    }
+
     // 관리자 확인
     const userInfo = await chrome.storage.local.get(['userInfo']);
     if (userInfo.userInfo?.email !== ADMIN_EMAIL) {
@@ -2261,10 +2050,14 @@ async function handleGetAllGeneratedPosts(limit = 100, sendResponse) {
       return;
     }
 
+    // collectionGroup 쿼리로 모든 generatedPosts 조회
     const queryUrl = `${FIRESTORE_BASE_URL}:runQuery`;
-    const response = await fetchWithTokenRefresh(queryUrl, {
+    const response = await fetch(queryUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
       body: JSON.stringify({
         structuredQuery: {
           from: [{
@@ -2276,11 +2069,6 @@ async function handleGetAllGeneratedPosts(limit = 100, sendResponse) {
         }
       })
     });
-
-    if (!response) {
-      sendResponse({ success: false, error: '로그인이 필요합니다.' });
-      return;
-    }
 
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
@@ -2300,3 +2088,4 @@ async function handleGetAllGeneratedPosts(limit = 100, sendResponse) {
     sendResponse({ success: false, error: error.message });
   }
 }
+

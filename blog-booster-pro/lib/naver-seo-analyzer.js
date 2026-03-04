@@ -92,8 +92,8 @@ const NaverSEOAnalyzer = (function() {
 
     // 핵심 정보 체크 (-5점)
     const concretePatterns = [
-      /\d+[개대평명원시간분초%년월일주회층]/,
-      /[\d,]+원/,
+      /\d+[개대평명원시간분초%년월일주회층만억천건]/,
+      /[\d,]+만?\s*원/,
       /[\d.]+km|[\d.]+m|[\d.]+kg/,
       /\d+층|\d+호/,
       /\d+:\d+/,
@@ -185,8 +185,8 @@ const NaverSEOAnalyzer = (function() {
 
     // F (Fact): 수치, 단위, 스펙
     const factPatterns = [
-      /\d+[개대평명원시간분초%년월일주회층호]/,
-      /[\d,]+원/,
+      /\d+[개대평명원시간분초%년월일주회층호만억천건가지곳선]/,
+      /[\d,]+만?\s*원/,
       /[\d.]+km|[\d.]+m²|[\d.]+kg|[\d.]+cm/,
       /\d+인분|\d+인용/,
       /평점\s*[\d.]+/,
@@ -218,11 +218,12 @@ const NaverSEOAnalyzer = (function() {
       elements.push('R');
     }
 
-    // E (Experience): 느낌/결과
+    // E (Experience): 느낌/결과/평가/감정
     const experiencePatterns = [
-      /(느꼈|좋았|편했|만족|추천|아쉬웠)/,
-      /(불편|최고|괜찮|별로|솔직히)/,
-      /(기대\s*이상|기대\s*이하|생각보다)/,
+      /(느꼈|좋았|편했|만족|추천|아쉬웠|후회|감사|뿌듯|보람)/,
+      /(불편|최고|괜찮|별로|솔직히|강력|확실|결심|깨달|다행)/,
+      /(기대\s*이상|기대\s*이하|생각보다|역대급|인생|꿀팁)/,
+      /(놓치지|강추|비추|대박|실망|감동|충격|놀라|신세계)/,
     ];
     if (experiencePatterns.some(p => p.test(content))) {
       score += 5;
@@ -268,8 +269,8 @@ const NaverSEOAnalyzer = (function() {
     details.hasKeyword = hasKeyword;
 
     const numberPatterns = [
-      /\d+[개대평명원시간분%년월일회층]/,
-      /[\d,]+원/,
+      /\d+[개대평명원시간분%년월일회층만억천건]/,
+      /[\d,]+만?\s*원/,
       /[\d.]+kg|[\d.]+km/,
       /\d+가지|\d+곳|\d+선/,
     ];

@@ -5,6 +5,7 @@
 
 # 환경 설정 (민감 정보)
 lib/env-config.js
+blog-booster-pro/lib/env-config.js
 
 # OS 파일
 .DS_Store
